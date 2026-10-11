@@ -73,7 +73,6 @@ from kiro_crew._llama_lib_path import (  # noqa: F401
 from kiro_crew.acp.client import KIRO_CLI_BIN
 from kiro_crew.acp.kas_transport import (
     KAS_RELAY_ENGINE,
-    KAS_RELAY_ENGINE_FLAG,
     build_kas_argv,
 )
 
@@ -90,6 +89,7 @@ from kiro_crew.agent_discovery import (
     project_agent_files,
     project_agent_name,
 )
+from kiro_crew.agent_sdk import kas_engine_gap
 from kiro_crew.agent_sdk.provider_identity import is_claude_code
 from kiro_crew.agent_spec_format import (  # noqa: F401
     NATIVE_SKILL_ALIAS_PREFIX,
@@ -165,6 +165,7 @@ from kiro_crew.kiro_cli import (
     PATH_ONLY_INSTALL_NOTE,
     SPEC_PERMISSIONS_MIN_VERSION,
     installed_kiro_cli_version,
+    kas_relay_help,
     mcp_governance_may_apply,
     resolve_kiro_cli,
     spec_permissions_supported,
@@ -1538,39 +1539,15 @@ def _credential_vendor_line() -> str:
         return ""
 
 
-#: Bare flag name (no leading dashes) used to tell "this kiro-cli predates engine
-#: selection" apart from "it offers engines but not ours". Derived from the
-#: transport constant so the two can never drift.
-_KAS_ENGINE_FLAG_NAME = KAS_RELAY_ENGINE_FLAG.lstrip("-")
-
-
 def _kas_relay_help(binary: str) -> str | None:
     """``acp --help`` text for this kiro-cli, or ``None`` when the probe FAILED.
 
-    Read from help output because there is no machine-readable capability surface
-    for the engine selector. ``None`` means only one thing — the probe could not
-    run (spawn error, timeout) — so the caller reports genuinely-unknown as
-    unknown. Help text that RAN and simply lacks the engine selector is returned
-    as-is, not as ``None``: a kiro-cli too old to offer ``--agent-engine`` cannot
-    serve KAS at all, and reporting that as "unknown" would let a broken
-    configuration pass the readiness check and fail later at spawn instead.
-
-    Local binary, argv list, no shell, no credential involved.
+    The probe is :func:`kiro_cli.kas_relay_help` and the reading is
+    :func:`agent_sdk.kas_engine_gap`, both shared with the runtime floor
+    (``agent_sdk.kas_engine_unsupported_reason``), so the doctor and the gate
+    cannot read the help text differently.
     """
-    try:
-        proc = subprocess.run(  # noqa: S603 - argv list, no shell, local binary
-            [binary, "acp", "--help"],
-            capture_output=True,
-            timeout=15,
-            check=False,
-            # Pinned UTF-8 rather than bare text=True: help output is decoded
-            # here, and a platform-locale decode could mangle the flag name this
-            # probe searches for and report a supported kiro-cli as unreadable.
-            **UTF8_TEXT,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return f"{proc.stdout}\n{proc.stderr}"
+    return kas_relay_help(binary)
 
 
 def _doctor_kas(issues: list[str]) -> None:
@@ -1651,20 +1628,14 @@ def _report_kas_backend(issues: list[str]) -> None:
         # diagnostic must not invent a verdict it could not establish.
         print("  engine:      ⚠️  could not read `acp --help`; engine support unknown")
         return
-    # Two distinct failures, both definite: the flag is absent entirely (a
-    # kiro-cli predating engine selection) or it is present without this engine.
-    if f"--{_KAS_ENGINE_FLAG_NAME}" not in help_text:
-        print(f"  engine:      ❌ this kiro-cli has no --{_KAS_ENGINE_FLAG_NAME} flag")
-        print("               Fix: update kiro-cli, or switch agent.acp_backend to kiro.")
-        issues.append(
-            f"kiro-cli is too old to select the KAS engine (no --{_KAS_ENGINE_FLAG_NAME})"
-        )
-    elif KAS_RELAY_ENGINE in help_text:
+    # The same reading the gateway's boot floor acts on: a gap is definite.
+    gap = kas_engine_gap(help_text)
+    if gap is None:
         print(f"  engine:      ✅ {KAS_RELAY_ENGINE} supported")
     else:
-        print(f"  engine:      ❌ this kiro-cli does not offer engine {KAS_RELAY_ENGINE}")
+        print(f"  engine:      ❌ {gap}")
         print("               Fix: update kiro-cli, or switch agent.acp_backend to kiro.")
-        issues.append(f"kiro-cli does not support the KAS engine ({KAS_RELAY_ENGINE})")
+        issues.append(f"kiro-cli cannot serve the KAS engine: {gap}")
     # Reported from the SAME decision as the ``auth owner:`` line above, so the
     # two cannot disagree: the relay resolves every access token from whichever
     # store owns the spawn -- Crew's vault when it holds a usable identity,

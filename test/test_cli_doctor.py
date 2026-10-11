@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from conftest import make_dir_link, requires_symlinks
-from kiro_crew import cli_doctor, cron, extras
+from kiro_crew import cli_doctor, cron, extras, kiro_cli
 from kiro_crew.agent_sdk.backends import ACP_BACKEND_PI
 
 
@@ -1829,7 +1829,7 @@ class TestDoctorKas:
         cli_doctor._doctor_kas(issues)
         out = capsys.readouterr().out
         assert "does not offer engine v3" in out
-        assert any("does not support the KAS engine" in i for i in issues)
+        assert any("does not offer engine v3" in i for i in issues)
 
     def test_help_without_the_flag_is_a_failure_not_unknown(self, monkeypatch, capsys) -> None:
         """A kiro-cli predating engine selection must FAIL the check.
@@ -1850,7 +1850,20 @@ class TestDoctorKas:
         out = capsys.readouterr().out
         assert "no --agent-engine flag" in out
         assert "engine support unknown" not in out
-        assert any("too old to select the KAS engine" in i for i in issues)
+        assert any("no --agent-engine flag" in i for i in issues)
+
+    def test_engine_verdict_comes_from_the_shared_classifier(self, monkeypatch, capsys) -> None:
+        """The doctor and the boot floor read ``acp --help`` through ONE function."""
+        self._patch_cfg(monkeypatch, "kas")
+        monkeypatch.setattr(cli_doctor, "resolve_kiro_cli", lambda: "/x/kiro-cli")
+        self._patch_vault(monkeypatch)
+        monkeypatch.setattr(cli_doctor, "_kas_relay_help", lambda _binary: "any help")
+        monkeypatch.setattr(cli_doctor, "kas_engine_gap", lambda _text: "a stubbed gap")
+        issues: list[str] = []
+        cli_doctor._doctor_kas(issues)
+        out = capsys.readouterr().out
+        assert "engine:      ❌ a stubbed gap" in out
+        assert any("a stubbed gap" in i for i in issues)
 
     def test_unreadable_help_is_reported_unknown_not_failed(self, monkeypatch, capsys) -> None:
         """Only a FAILED probe is unknown; a diagnostic must not invent a verdict.
@@ -1880,7 +1893,7 @@ class TestDoctorKas:
             stdout = "Usage: kiro-cli acp [OPTIONS]"
             stderr = ""
 
-        monkeypatch.setattr(cli_doctor.subprocess, "run", lambda *a, **k: _Proc())
+        monkeypatch.setattr(kiro_cli.subprocess, "run", lambda *a, **k: _Proc())
         got = cli_doctor._kas_relay_help("/x/kiro-cli")
         assert got is not None
         assert "--agent-engine" not in got
@@ -1889,7 +1902,7 @@ class TestDoctorKas:
         def _boom(*_a, **_k):
             raise OSError("no such binary")
 
-        monkeypatch.setattr(cli_doctor.subprocess, "run", _boom)
+        monkeypatch.setattr(kiro_cli.subprocess, "run", _boom)
         assert cli_doctor._kas_relay_help("/x/kiro-cli") is None
 
     def test_no_credential_probe_is_performed(self, monkeypatch, capsys) -> None:
