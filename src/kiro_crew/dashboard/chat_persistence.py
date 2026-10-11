@@ -2538,6 +2538,7 @@ def _save_slot_to_history(
     rows_only: bool = False,
     pending_mode_slot: _ChatSlot | None = None,
     mutes_opened_override: bool | None = None,
+    muted_override: bool | None = None,
     after_commit_under_lock: Callable[[], None] | None = None,
     refuse_stale_empty_merge: bool = False,
 ) -> bool:
@@ -2719,6 +2720,7 @@ def _save_slot_to_history(
                     else None
                 ),
                 mutes_opened_override=mutes_opened_override,
+                muted_override=muted_override,
                 after_commit_under_lock=after_commit_under_lock,
             )
             if refusal is not None:
@@ -2825,6 +2827,7 @@ def _save_slot_to_history(
                     rewrite=rewrite,
                     rows_only=rows_only,
                     mutes_opened_override=mutes_opened_override,
+                    muted_override=muted_override,
                 )
             )
             meta_str = json.dumps(meta_line) + "\n"
@@ -2987,6 +2990,7 @@ async def save_slot_off_loop(
     rows_only: bool = False,
     issued_by_the_retraction: bool = False,
     mutes_opened_override: bool | None = None,
+    muted_override: bool | None = None,
     after_commit_under_lock: Callable[[], None] | None = None,
 ) -> bool:
     """Persist a slot from the event loop without blocking or dropping the save.
@@ -3069,6 +3073,7 @@ async def save_slot_off_loop(
             rows_only=rows_only,
             pending_mode_slot=pending_mode_slot,
             mutes_opened_override=mutes_opened_override,
+            muted_override=muted_override,
             after_commit_under_lock=after_commit_under_lock,
         )
 
