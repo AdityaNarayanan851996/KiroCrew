@@ -81,7 +81,7 @@ import {
   type PathActions,
   type SessionActions,
 } from './markdown/contexts'
-import { artifactSlugFromHref, soleLinkInParagraph, useSessionChip, useUnfurlHref } from './markdown/linkTargets'
+import { artifactSlugFromHref, classifySessionLink, soleLinkInParagraph, useSessionChip, useUnfurlHref } from './markdown/linkTargets'
 import { dashboardPreviewRef, dashboardPreviewSlugFromHref } from '../utils/dashboardPreview'
 import { ClosedSessionNotice } from './markdown/ClosedSessionNotice'
 import { activatePath, usePathResolution } from './markdown/pathReferences'
@@ -166,7 +166,7 @@ function MdAnchor({ node, href, children }: React.AnchorHTMLAttributes<HTMLAncho
     } catch { /* keep it a normal link */ }
   }
   // The session parameter this href carries, verbatim. Handed to
-  // `resolveSessionChip` below rather than a pre-resolved key, because that
+  // `classifySessionLink` below rather than a pre-resolved key, because that
   // helper owns which spellings name a session — so a short `?sid=chat-1380`
   // resolves here exactly as the same short name does in a backtick chip.
   const sessionHrefSid = sessionCandidate ? chatHrefSid(sessionCandidate) : null
@@ -190,8 +190,22 @@ function MdAnchor({ node, href, children }: React.AnchorHTMLAttributes<HTMLAncho
   const sessionRouting = !!(sessionActions.onSessionOpen && sessionActions.sessions)
   // Same gate as the inline chip, so a link and a bare key naming one session
   // cannot disagree about whether it is reachable.
-  // A closed session the page can resume counts too (`useSessionChip`).
+  // A closed session the page can resume counts too (`useSessionChip`): its
+  // background probe can turn a `?sid=` the open roster does not hold into a live,
+  // resumable chip, so this — not the roster alone — is the switchable case.
   const sessionLink = useSessionChip(sessionHrefSid, sessionActions)
+  // ONE classification drives the hover text, so the anchor never resolves the
+  // key a second time of its own — a second copy drifts, and that drift is the
+  // false "not open" tooltip (#18036). `classifySessionLink` reports `not-open`
+  // ONLY for a sid the roster genuinely does not hold (a full key the roster
+  // lacks, or a short name whose number no open slot answers to): the active
+  // session is open, and a short name we cannot pin to one slot (ambiguous, or a
+  // message with no write time) may name an open session, so both stay silent
+  // rather than lie. The extra `!sessionLink` guard keeps the tooltip off a
+  // CLOSED-but-resumable session `useSessionChip` has resolved into a live chip —
+  // "not open" would be false for a session the reader can reopen from here.
+  const sessionClass = sessionHrefSid ? classifySessionLink(sessionHrefSid, sessionActions) : null
+  const sessionHrefNotOpen = !sessionLink && sessionClass?.kind === 'not-open'
   // The attribute carries the canonical key: a modified click goes to the browser,
   // and an authored `dashboard_…` sid would open a session `?sid=` cannot resolve.
   const sessionHref = sessionLink && sessionCandidate ? canonicalChatHref(sessionCandidate, sessionLink.key) : null
@@ -346,7 +360,9 @@ function MdAnchor({ node, href, children }: React.AnchorHTMLAttributes<HTMLAncho
       onClick={sessionHrefNamesSession ? onSessionClick : (pathResolution.candidate ? onPathClick : undefined)}
       title={sessionLink && !sessionLink.failure
         ? `${sessionLink.title}\n${i18nT('components.markdownRenderer.click_to_switch_to_this_session')}`
-        : undefined}
+        : sessionHrefNotOpen
+          ? i18nT('components.markdownRenderer.session_closed_link_disabled')
+          : undefined}
       {...(ext ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
       // A session link that names a session but cannot open one drops the live-link
       // affordance rather than keeping it and doing nothing. The click is swallowed
@@ -360,6 +376,19 @@ function MdAnchor({ node, href, children }: React.AnchorHTMLAttributes<HTMLAncho
         : 'text-accent underline underline-offset-2 decoration-accent/40 hover:decoration-accent'}
     >
       <InsideLinkCtx.Provider value={true}>{children}</InsideLinkCtx.Provider>
+      {/* The not-open explanation reaches touch / keyboard / AT users as a
+          visually-hidden description APPENDED to the anchor's accessible name —
+          a native `title` renders only on mouse hover, so without this the muted
+          link stayed the "dead link or bug?" mystery #10344 reported for exactly
+          those users. It is a trailing span (not an `aria-label`) so the link's
+          own text stays the accessible NAME and screen readers still announce it
+          — the review finding on #18036 was that an `aria-label` REPLACED the
+          text, making several such links sound identical. Same string, gated by
+          the same `not-open` classification, so it never claims a state we cannot
+          verify (the ambiguous / no-timestamp cases stay silent here too). */}
+      {sessionHrefNotOpen && (
+        <span className="sr-only">{` (${i18nT('components.markdownRenderer.session_closed_link_disabled')})`}</span>
+      )}
     </a>
     <ClosedSessionNotice failure={sessionLink?.failure} name={sessionLink?.key ?? ''} />
     {reveal.error && (
