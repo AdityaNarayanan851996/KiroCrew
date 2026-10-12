@@ -3448,6 +3448,7 @@ async def create_session(
                     exc_info=True,
                 )
         state.push_slots_update()
+    lineage_recorded = await _record_spawn(caller_key, slot)
     _audit(
         caller_session_key=caller_key,
         operation="create",
@@ -3462,6 +3463,11 @@ async def create_session(
             # Always present: "false" is the record that the grant did not transfer.
             "inherited_trust": "true" if inherited_trust else "false",
             "inherited_trust_reads": "true" if inherited_trust_reads else "false",
+            # Whether the creating edge reached the creator's crew log. "false" means
+            # the child nests from this process's witness alone and would float at top
+            # level after a restart. The audit log is this fact's durable home -- the
+            # API reply has no reader for it (and _record_spawn also logs a warning).
+            "lineage_recorded": "true" if lineage_recorded else "false",
         },
     )
     return {
@@ -3799,6 +3805,7 @@ async def fork_session(
                 exc_info=True,
             )
     state.push_slots_update()
+    lineage_recorded = await _record_spawn(caller_key, child)
     _audit(
         caller_session_key=caller_key,
         operation="fork",
@@ -3810,6 +3817,9 @@ async def fork_session(
             "folder_id": child.folder_id or "",
             "inherited_trust": "true" if posture.get("trust") else "false",
             "inherited_trust_reads": "true" if posture.get("trust_reads") else "false",
+            # See create_session: whether the creating edge landed is kept in the audit
+            # log, its durable home, rather than the API reply, which has no reader.
+            "lineage_recorded": "true" if lineage_recorded else "false",
         },
     )
     return {
@@ -3820,6 +3830,62 @@ async def fork_session(
         "messages": result.messages,
         "folder_id": child.folder_id or None,
     }
+
+
+async def _record_spawn(caller_key: str, child: Any) -> bool:
+    """Write the child's creating edge to the CREATOR's crew log (``session/spawned``)
+    and wait, bounded, for it to land. Returns whether the edge is on disk.
+
+    The mint witness (``_lineage_minted``) lives only in this process, and the child's
+    own ``session/opened.parent`` is not written until its first turn, so neither
+    survives a restart in between. The creator's log already exists, so the edge is
+    recorded there, and the caller is told the create succeeded only after this has
+    settled: a reply sent while the entry is still queued would be lost with it on a
+    crash, and the child would restore at the top level.
+
+    Taken from the values stamped at mint, and only when this process stamped them:
+    the creator sid frozen at mint names the log that was live when the child was
+    made. ``True`` with nothing written when there is no edge to record -- no witness,
+    or a creator with no ACP session yet, which has no log and keeps the in-memory
+    witness alone. Never raises: the create has already committed, so a failure here
+    is reported as ``False`` rather than as a failed create, which a caller would
+    retry into a duplicate session.
+
+    The write is queued before the wait, so a cancellation of the wait does not
+    withdraw it: the entry still lands with the birth it belongs to.
+    """
+    if not bool(getattr(child, "_lineage_minted", False)):
+        return True
+    creator_slot = str(getattr(child, "_created_by", "") or "")
+    creator_sid = str(getattr(child, "_created_by_sid", "") or "")
+    child_slot = str(getattr(child, "key", "") or "")
+    if not creator_sid or not creator_slot or creator_slot != caller_key:
+        return True
+    try:
+        if not crew_log_emit.enabled():
+            return True
+        landed = await crew_log_emit.awaiting_commit(
+            lambda settled: crew_log_emit.on_session_spawned(
+                creator_sid,
+                creator_slot=creator_slot,
+                child_slot=child_slot,
+                on_settled=settled,
+            ),
+            what="session/spawned",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("session_control: could not record session/spawned", exc_info=True)
+        return False
+    if not landed:
+        logger.warning(
+            "session_control: the creating edge for %s did not land in its creator's crew "
+            "log; it nests under %s only until this gateway restarts",
+            child_slot,
+            creator_slot,
+        )
+    return landed
 
 
 #: The refusal factory's product: it RETURNS the error to raise rather than raising,
