@@ -601,6 +601,7 @@ export function createTranscriptRenderers(
             featureRequestFormUrl={featureRequestFormUrl}
             onOpenCapabilities={openCapabilities}
             onOpenTurnLimit={isTurnTimeout(m) ? o.onOpenTurnLimit : undefined}
+            turnLimitSlot={isTurnTimeout(m) ? o.slot : undefined}
           />,
         )
       },

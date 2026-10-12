@@ -8380,6 +8380,17 @@
       "mute_failed": "Impossible de mettre cette session en sourdine",
       "unmute_failed": "Impossible de réactiver le son de cette session"
     },
+    "sessionTurnLimit": {
+      "all_sessions": "Toutes les sessions : ouvrir les Réglages",
+      "card_button_hint": "Choisit une durée maximale d’un tour pour cette session seulement, ou ouvre les Réglages pour la modifier pour toutes. S’applique à partir du tour suivant.",
+      "follow_global": "Comme toutes les sessions (actuellement {{limit}})",
+      "hint": "Durée pendant laquelle un tour de cette session peut s’exécuter avant d’être arrêté. S’applique à partir du tour suivant.",
+      "label": "Durée maximale d’un tour",
+      "load_failed": "Impossible de charger la durée maximale d’un tour de cette session",
+      "loading": "Chargement…",
+      "save_failed": "Impossible d’enregistrer la durée maximale d’un tour",
+      "this_session": "Cette session"
+    },
     "sessionColorSwatches": {
       "custom_color": "Couleur personnalisée",
       "hex_color_code": "Code couleur hexadécimal",

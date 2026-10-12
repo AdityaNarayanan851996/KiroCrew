@@ -2882,6 +2882,8 @@ class _ChatSlot:
         "_reasoning_effort",
         "_effort_pick_gen",
         "autocompact_pct",
+        "turn_timeout_secs",
+        "_turn_timeout_hydrated",
         "mode",
         "workspace",
         "memory_store",
@@ -3219,6 +3221,13 @@ class _ChatSlot:
         # the global session.autocompact_pct. Persisted with the slot and
         # re-seeded into the SessionManager after restore.
         self.autocompact_pct: float | None = None
+        # Per-session turn time limit (seconds). None = follow the global
+        # agent.chat_turn_timeout_secs. Persisted with the slot; read by the turn
+        # dispatch (turn_dispatch.resolve_turn_limit) when each turn starts.
+        self.turn_timeout_secs: int | None = None
+        # False while a reopened tab's own limit is still unread from its
+        # transcript: its saves carry the on-disk value forward meanwhile.
+        self._turn_timeout_hydrated: bool = True
         # "" = default chat; app workers may carry their own mode (design-critique)
         self.mode = mode
         self.workspace = workspace
