@@ -1110,6 +1110,9 @@ export interface RemoteCrewCapabilities {
   /** The equality gate the backend enforces on every dispatch. False also covers
    *  "could not be read": an unknown version cannot be proven equal. */
   version_match: boolean
+  /** The peer runs a strictly older build than this machine (exact version,
+   *  so a patch skew counts). Absent from a gateway that predates the field. */
+  behind?: boolean
   agents: { name: string; description: string; scope: string; model: string }[]
   /** The agent the PEER falls back to when the session has picked none. "" when
    *  the roster read failed — never substitute this machine's default, which
@@ -1122,6 +1125,47 @@ export interface RemoteCrewCapabilities {
   /** Per-field failure codes for the reads that did not land, so one unreachable
    *  roster disables its own control rather than blanking the whole shelf. */
   unavailable: Record<string, string>
+}
+
+/** One CONNECTED crew's version beside this machine's (`GET /api/instances/versions`). */
+export interface InstanceVersionRow {
+  id: string
+  name: string
+  /** The peer's gateway version, or "" when it did not answer. */
+  version: string
+  /** Strictly older than `local_version`; never true for an unknown version. */
+  behind: boolean
+  /** This dashboard can run the crew's updater: false for a chained crew
+   *  (no shell from here) and a fargate or headless one (no gateway). */
+  updatable: boolean
+  /** Why the crew's version could not be read (the carrier's code), or "" when
+   *  it answered. A crew with an error is never `behind`: its version is unknown. */
+  error?: string
+}
+
+export interface InstanceVersions {
+  local_version: string
+  instances: InstanceVersionRow[]
+}
+
+/** The latest "Update remote" job for one crew (`GET /api/instances/{id}/update`). */
+export interface RemoteUpdateJob {
+  /** `succeeded`: the crew came back on a different version. `unchanged`: both
+   *  commands exited 0 but it came back on the same version (its updater
+   *  installed nothing). `unverified`: it did not answer with a version in time. */
+  state: 'running' | 'succeeded' | 'unchanged' | 'unverified' | 'failed'
+  /** Where the job is, or where it failed: the remote `kirocrew update`, then
+   *  `kirocrew restart`, then reading the crew's version back. */
+  phase: 'updating' | 'restarting' | 'verifying' | 'done'
+  started_at: number
+  finished_at: number | null
+  elapsed_secs: number
+  /** The remote's redacted error tail on a failure, else "". */
+  error: string
+  /** The crew's version before the update and after its restart; "" when it
+   *  did not answer. */
+  version_before: string
+  version_after: string
 }
 
 export interface ChatSlot {

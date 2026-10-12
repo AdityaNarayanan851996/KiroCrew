@@ -9959,6 +9959,40 @@
       "turn_4_assistant": "Añadida bajo **Unreleased**:\n\n```md\n- fix: retry the token refresh once before signing out\n```\n\n¿La incluyo también en el PR?",
       "turn_4_user": "Sí. Luego resume qué cambió.",
       "turn_5_assistant": "Enviado. En resumen: un reintento alrededor de la renovación del token, una prueba de regresión para el cierre de sesión y la línea del CHANGELOG. El PR #12 tiene las tres cosas y está enlazado a #7."
+    },
+    "remoteBehindBadge": {
+      "label": "Desactualizada: remota {{remote}}, local {{local}}",
+      "hint": "Esta tripulación ejecuta {{remote}}, una versión más antigua que la {{local}} de esta máquina.",
+      "read_failed": "No se pudieron leer las versiones de tus tripulaciones remotas",
+      "row_read_failed": "No se pudo leer la versión de {{name}} ({{code}})."
+    },
+    "remoteUpdate": {
+      "update": "Actualizar",
+      "update_aria": "Actualizar {{name}}",
+      "confirm_hint": "Ejecuta la actualización en “{{name}}” y después lo reinicia.",
+      "confirm": "Actualizar “{{name}}” ahora",
+      "cancel": "Cancelar",
+      "updating": "Actualizando {{name}}…",
+      "restarting": "Reiniciando {{name}}…",
+      "succeeded": "{{name}} ahora ejecuta {{version}}.",
+      "failed_update": "La actualización en {{name}} falló: {{error}}",
+      "failed_restart": "La nueva versión está instalada en {{name}}, pero su reinicio falló: {{error}}",
+      "verifying": "Comprobando la versión de {{name}}…",
+      "succeeded_unknown": "{{name}} se actualizó y reinició. Se vuelve a conectar por sí solo.",
+      "unchanged": "{{name}} se reinició pero sigue ejecutando {{version}}: su actualizador no instaló nada. Puede que siga un canal de versiones que aún no ofrece la versión de esta máquina, o que se actualice de otra forma. Actualízala en esa tripulación o selecciona Reintentar más tarde.",
+      "unverified": "{{name}} ejecutó su actualización y se reinició, pero aún no se ha vuelto a conectar para confirmar su versión. Esto se actualiza cuando se reconecte.",
+      "failed_next_step": "Corrige la causa en {{name}} (por ejemplo, su red o su inicio de sesión) y luego selecciona Reintentar.",
+      "try_again": "Reintentar",
+      "failed_restart_next_step": "{{name}} sigue ejecutando su versión anterior hasta que se reinicie. Ejecuta {{command}} en esa tripulación o selecciona Reintentar para reiniciarla desde aquí.",
+      "status_read_failed": "No se pudo leer el estado de la actualización de {{name}}: {{error}}"
+    },
+    "remoteUpdateOffer": {
+      "title": "Algunas tripulaciones remotas ejecutan una versión más antigua",
+      "body": "Esta máquina ahora ejecuta {{local}}. Cada actualización te pide confirmación primero.",
+      "row": "{{name}}: {{remote}}",
+      "dismiss": "Descartar",
+      "read_failed_title": "No se pudieron comprobar las versiones de tus tripulaciones remotas tras esta actualización",
+      "unread": "Aún no hay versión de {{names}}, así que también podrían estar desactualizadas."
     }
   },
   "hooks": {
@@ -11982,7 +12016,8 @@
         "approval_elsewhere": "El agente en {{name}} espera una aprobación que esta ventana no puede responder. Respóndela en el panel propio de la tripulación.",
         "stopping": "Deteniendo…",
         "yolo_elsewhere": "YOLO afecta a todas las sesiones de {{name}}. Cámbialo en el panel de la propia tripulación.",
-        "mode_unknown": "No se pudo leer el modo de aprobación de {{name}}. Reintentando…"
+        "mode_unknown": "No se pudo leer el modo de aprobación de {{name}}. Reintentando…",
+        "update_in_remote_crew": "Actualizar {{name}} en Crew remoto"
       },
       "messageContextMenu": {
         "copy_link_text": "Copiar texto del enlace",
