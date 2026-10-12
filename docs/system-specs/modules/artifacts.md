@@ -646,6 +646,41 @@ SUCCEEDED but whose link is not usable yet (e.g. CloudFront still rolling out)
 records that status on the separate `publication.notice` field, never
 `last_error` — so it does not render the publish as failed or withhold the URL.
 
+### An artifact that is already published
+
+The two publish paths keep their link in different places, and each surface
+reads it from where it lives:
+
+- **Public web (own AWS).** The deploy keys a site by the artifact slug
+  (`site_id`) and records it only in the AWS account's resource tags, never on
+  a non-webapp artifact. When the public-web row is offered and configured,
+  `PublishHub` reads `GET /api/deploy/list` as it opens and matches the
+  normalized slug (`deploySiteIdFor`, the same normalization the deploy route
+  applies) against each site's `site_id`. A match shows the published URL
+  (through `safeHttpUrl`), an Open link and an "Update (same URL)" action in
+  place of the public-web row, and the confirm steps that follow name it an
+  update; the update deploys with the profile that lists the site,
+  so it reuses that site rather than creating one in the default profile's
+  account. No listing, `configured: false` or no match leaves the destination
+  list as it is, and the lookup never holds the list back. A failed call, or
+  a listing that names accounts it could not read (`profile_errors`), keeps
+  the list usable and shows an error notice above it, with a Check again
+  button that re-reads the listing in place, since an unpublished
+  artifact's panel would otherwise look the same. The notice also shows
+  beside a link kept from an earlier read. A publish writes its site
+  into the cached listing (status `deploying`), as the Artifact Deploy page
+  does, so the next open shows the link before the tags catch up.
+  Because the answer comes from the tags, a site removed by teardown, the
+  expiry reaper or outside the dashboard is not shown.
+- **Core destinations.** `POST /api/artifacts/{slug}/publish` records
+  `publication.view_url`. The detail page links it whenever it is set and
+  passes `safeHttpUrl`, not only when the artifact is a fork or the remote copy
+  is ahead.
+
+The detail page does not call `/api/deploy/list`: that listing reads every
+registered profile's account, which is a cost paid when the Publish panel
+opens rather than on every detail view.
+
 ### Withdrawal is NOT best-effort
 
 `publish_sync.unpublish` deletes at the destination and only then clears the local
