@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -372,7 +373,81 @@ def refresh_kiro_catalog(rows: list[dict[str, Any]], namespace: str) -> tuple[bo
     ids, windows = admit_catalog_rows(rows)
     windows_changed = _replace_kiro_windows(windows)
     advertised_changed = refresh_advertised_models(namespace, ids)
+    _replace_catalog_rates(namespace, _catalog_rates(rows, ids))
     return windows_changed, advertised_changed
+
+
+# Credit multiplier per model id, off the same ``--list-models`` rows: the
+# ``rate_multiplier`` field the picker's cost badge renders (Auto = 1.0), kept
+# per registry NAMESPACE -- the one :func:`refresh_kiro_catalog` was handed --
+# so a price is only ever read back for a session whose backend shares that
+# namespace, never for another harness whose ids happen to fold onto these. In
+# memory only and REPLACED by each snapshot, like the window cache: a price is a
+# fact about the catalog served now, and a stale one surviving a restart would
+# route a turn on a price the account does not pay. A cold process has none,
+# which every reader treats as "price unknown".
+_CATALOG_RATES: dict[str, dict[str, float]] = {}
+
+
+def _priced(value: object) -> float | None:
+    """*value* as a credit multiplier, or ``None`` when it is not a price.
+
+    The same test the picker applies before it draws a badge: a finite number
+    above zero. ``bool`` is refused, since ``True`` would read as a 1.0x price.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
+def _catalog_rates(rows: list[dict[str, Any]], ids: Sequence[str]) -> dict[str, float]:
+    """The multiplier of every ADMITTED id whose row carries a price."""
+    admitted = set(ids)
+    rates: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rate = _priced(row.get("rate_multiplier"))
+        if rate is None:
+            continue
+        for key in (row.get("model_id"), row.get("model_name")):
+            if isinstance(key, str) and key in admitted:
+                rates[key] = rate
+    return rates
+
+
+def _replace_catalog_rates(namespace: str, rates: dict[str, float]) -> None:
+    """Make *namespace*'s prices exactly *rates*; an empty snapshot is a no-op."""
+    if not rates:
+        return
+    _CATALOG_RATES[namespace] = dict(rates)
+
+
+def rate_multiplier(model_id: str, namespace: str) -> float | None:
+    """*model_id*'s credit multiplier in *namespace*'s last catalog, or ``None``.
+
+    *namespace* is the registry namespace of the session asking
+    (``agent_sdk.backends.model_registry_namespace``); a namespace no catalog was
+    read for has no prices. Asked as written, then case-folded, then on the
+    dot/dash fold the picker's ``normalizeModelKey`` applies, because a session
+    advertises the spelling its own backend uses and the catalog may print another.
+    """
+    rates = _CATALOG_RATES.get(namespace)
+    name = str(model_id or "").strip()
+    if not rates or not name:
+        return None
+    for candidate in (name, name.lower()):
+        found = rates.get(candidate)
+        if found is not None:
+            return found
+    folded = name.lower().replace(".", "-")
+    for key, rate in rates.items():
+        if key.lower().replace(".", "-") == folded:
+            return rate
+    return None
 
 
 def persist_kiro_windows() -> None:

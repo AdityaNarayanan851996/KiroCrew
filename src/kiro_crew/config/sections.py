@@ -5200,6 +5200,25 @@ class DecisionsConfig:
             "picked 'Auto (Jev)' -- a manual model choice is never overridden.",
         ),
     )
+    model_route_derive: bool = field(
+        default=False,
+        metadata=_meta(
+            "Derive tier models",
+            "Fill each EMPTY tier of 'Model per difficulty tier' from the models your "
+            "account is offered right now, using their credit multipliers: 'simple' "
+            "runs on the cheapest model priced below the session's own model, "
+            "'medium' keeps the session's own model, and 'complex' runs on the "
+            "dearest model priced above it. A tier you pinned always wins. With this "
+            "on, a sub-agent spawned with no model of its own is routed the same "
+            "way once tool-call arguments are also allowed on the Decisions card "
+            "(its task is one), and a chat turn you regenerate, or the turn after one that hit "
+            "its length or step limit, runs one tier higher. Off by default. No "
+            "model id is written for you: the targets "
+            "are read from the live model list each time, and a tier with no "
+            "price to compare (a cold list, a tie) keeps the session's model. The "
+            "decision log marks every derived choice 'derived'.",
+        ),
+    )
     provider: DecisionProviderConfig = field(
         default_factory=DecisionProviderConfig,
         metadata=_meta("Provider", "Where decisions are sent and what they may cost."),
@@ -5294,6 +5313,9 @@ class DecisionsConfig:
             # map, since this key cannot widen anything -- every id is still held
             # against the provider's advertised list at routing time.
             model_route=coerce_model_route(section.get("model_route")),
+            # A real bool only: anything else reads as the default, off, so a
+            # hand-edit that fails to parse never turns routing on.
+            model_route_derive=reader.read("model_route_derive", _safe_bool),
             provider=provider,
             nudge_wake=NudgeWakeConfig.from_raw(section.get("nudge_wake")),
         )
