@@ -7966,6 +7966,26 @@ class TestOpenLockFile:
         assert lock.exists()
         assert lock.read_bytes() == b""
 
+    def test_non_creating_open_refuses_a_missing_file_and_creates_nothing(self, tmp_path):
+        from kiro_crew.platform_compat import open_lock_file
+
+        lock = tmp_path / "absent.lock"
+        with pytest.raises(FileNotFoundError):
+            with open_lock_file(lock, create=False):
+                pass
+        assert not lock.exists()
+
+    def test_non_creating_open_preserves_existing_content(self, tmp_path):
+        lock = tmp_path / "held.lock"
+        lock.write_text("holder-pid 1234")
+        from kiro_crew.platform_compat import file_lock, open_lock_file
+
+        with open_lock_file(lock, create=False) as fd:
+            assert lock.read_text() == "holder-pid 1234"  # open did not truncate
+            with file_lock(fd, exclusive=True):
+                pass
+        assert lock.read_text() == "holder-pid 1234"
+
     def test_no_lock_site_opens_truncating(self):
         # CONTRACT (the work-ledger fix's test shape, applied fleet-wide): grep the source
         # tree for a truncating open whose descriptor is handed to a
@@ -7975,13 +7995,6 @@ class TestOpenLockFile:
         import kiro_crew
 
         src_root = os.path.dirname(os.path.abspath(kiro_crew.__file__))
-        # deploy/pending.py and deploy/profiles.py are owned by an in-flight
-        # deploy-locks fix; drop the exemptions once it merges — the scan
-        # will then enforce those sites too.
-        exempt = {
-            os.path.join(src_root, "deploy", "pending.py"),
-            os.path.join(src_root, "deploy", "profiles.py"),
-        }
         offenders = []
         open_w = re.compile(r"""\bopen\([^)]*["']wb?["']\)""")
         acquire = re.compile(r"\b(file_lock|flock_exclusive|acquire_lock)\(\s*\w+\.fileno\(\)")
@@ -7990,8 +8003,6 @@ class TestOpenLockFile:
                 if not name.endswith(".py"):
                     continue
                 path = os.path.join(dirpath, name)
-                if path in exempt:
-                    continue
                 with open(path, encoding="utf-8", errors="replace") as fh:
                     lines = fh.readlines()
                 for i, line in enumerate(lines):
