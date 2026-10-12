@@ -113,10 +113,15 @@ _UNSAFE_SHELL_RE = re.compile(r">|`|\$\(|<\(|(?<!&)&(?!&)|\$\[")
 # stripped before _UNSAFE_SHELL_RE — otherwise every `find … 2>/dev/null`
 # falls through to an interactive prompt. A redirect to any real path
 # (e.g. `cmd > out.txt`) still trips _UNSAFE_SHELL_RE and stays unsafe.
-# The `(?![\w./-])` guard pins the match to the literal device `/dev/null`:
-# without it, `>/dev/nullx` or `>/dev/null/../etc/passwd` would be scrubbed as
-# a sink, smuggling a real-file write past the unsafe-shell check.
-_DEVNULL_REDIR_RE = re.compile(r"(?:\d*>>?|&>)\s*/dev/null(?![\w./-])|\d*>&\d+")
+# The lookahead ends each idiom where bash ends the word: space, tab, newline,
+# an operator, or the end of the command. Anything else continues it, so
+# `>/dev/nullx`, `>/dev/null"x"` and `>&2x` (bash opens the file `2x`) are real
+# writes, not sinks. The classes are spelled out because `\s` and `\d` on a str
+# pattern also match U+00A0, `\r`, `\v`, `\f` and non-ASCII digits, which bash
+# keeps inside a word.
+_DEVNULL_REDIR_RE = re.compile(
+    r"(?:(?:[0-9]*>>?|&>)[ \t]*/dev/null|[0-9]*>&[0-9]+)(?=$|[ \t\n;&|()<>])"
+)
 
 # ── Side effects reached through an allowlisted read-only verb ──
 #
@@ -1478,3 +1483,12 @@ def unsafe_bash_reason(cmd: str) -> str:
     safety grounds).
     """
     return _classify_bash(cmd)
+
+
+def writes_through_redirect(cmd: str) -> bool:
+    """Whether ``cmd`` writes through a redirect: :func:`_classify_bash`'s rule alone.
+
+    The ``_DEVNULL_REDIR_RE`` discards are not writes; every other ``>`` is, quoted
+    or not, since telling a quoted ``>`` apart needs bash's full quoting rules.
+    """
+    return ">" in _DEVNULL_REDIR_RE.sub(" ", cmd)

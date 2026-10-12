@@ -17,7 +17,10 @@ ENV_ASSIGNMENT_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*=")
 
 _REDIRECT_PLACEHOLDER = "\x00REDIR\x00"
 _REDIRECT_RE = re.compile(r"[0-9]*>&[0-9]*|&>>?")
-_COMMAND_SPLIT_RE = re.compile(r"\s*(?:\|\||&&|;|&|\n|\|)\s*")
+# The blanks around a separator are bash's own: space and tab. `\s` would also
+# eat U+00A0, `\r`, `\v` and `\f`, which bash keeps as part of the next or
+# previous word, so a segment would read differently from what bash runs.
+_COMMAND_SPLIT_RE = re.compile(r"[ \t]*(?:\|\||&&|;|&|\n|\|)[ \t]*")
 _GRANT_SPLIT_RE = re.compile(r"\s*(?:\|\||&&|;|\|)\s*")
 _COMMAND_SUBSTITUTION_RE = re.compile(r"\$\(|`|<\(|>\(")
 
@@ -234,6 +237,42 @@ def matches_trusted_pattern(command: str, patterns: set[str]) -> str | None:
             matched_patterns.append(match)
         return ",".join(matched_patterns)
     return next((p for p in patterns if _tool_matches(p, normalized)), None)
+
+
+def redirect_outside_grant(command: str, patterns: set[str]) -> bool:
+    """Whether ``command`` writes through a redirect no matching grant spelled.
+
+    A base grant such as ``gh *`` vouches for a program and whatever arguments
+    it is given. An output redirect is not one of those arguments: the shell
+    opens the target before the program starts, so honouring ``gh *`` for
+    ``gh pr view 42 > /tmp/x`` would let a grant for ``gh`` write any file.
+
+    A segment that writes through a redirect is covered only by a pattern that
+    matches it AND spells a write redirect itself (the exact-command grant for
+    that line, or a pattern written with one), or by the broad ``*`` grant.
+    Discard redirects (``2>/dev/null``, ``2>&1``) are not writes and need no
+    such pattern. What counts as a write is the read-only classifier's rule,
+    :func:`kiro_crew.security.readonly_bash.writes_through_redirect`.
+
+    ``False`` when the command cannot be segmented: such a command matches no
+    pattern in the first place.
+    """
+    # Imported here: ``kiro_crew.security`` imports this module at package load.
+    from kiro_crew.security.readonly_bash import writes_through_redirect
+
+    split = split_command_segments(command)
+    if split is None:
+        return False
+    normalized, segments = split
+    for segment in segments if len(segments) > 1 else [normalized]:
+        if not writes_through_redirect(segment):
+            continue
+        if not any(
+            pattern == "*" or (writes_through_redirect(pattern) and _tool_matches(pattern, segment))
+            for pattern in patterns
+        ):
+            return True
+    return False
 
 
 def extract_base_command(command: str) -> str:
