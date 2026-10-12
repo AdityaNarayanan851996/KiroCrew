@@ -54,6 +54,7 @@ with one identity, so callers import from here.
 
 from __future__ import annotations
 
+import errno as _errno
 import hashlib
 import hmac as _hmac
 import importlib
@@ -414,6 +415,87 @@ def _owner_only_tmp_opener(path: str, flags: int) -> int:
         os.close(fd)
         raise
     return fd
+
+
+# The errnos that mean "this descriptor or filesystem has no fsync", as opposed
+# to "the writeback failed". Only the first class may be ignored: a descriptor
+# that cannot be synced on a given platform must not make the store unusable
+# there. Built with ``getattr`` because the errno module only defines the name
+# the host's C library has, and the set collapses duplicates on the platforms
+# where ENOTSUP and EOPNOTSUPP share a value.
+#
+# The import is aliased private (``_errno``) like ``_sys`` and ``_hmac`` above:
+# this module's ``__all__`` is derived from what it binds, so a bare ``import
+# errno`` would publish the errno module as part of the store's facade.
+_SYNC_UNSUPPORTED_ERRNOS = frozenset(
+    code
+    for code in (
+        getattr(_errno, name, None) for name in ("EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP")
+    )
+    if code is not None
+)
+
+
+def _sync_before_publish(fh: Any) -> None:
+    """Flush *fh* to the device before its temp file is renamed into place.
+
+    A temp file plus a rename makes the SWAP atomic; it does not make the bytes
+    durable. The rename can land while the content is still only in the page
+    cache, so a crash leaves the artifact's name pointing at a file the kernel
+    never finished writing -- a torn read that the atomic rename was supposed to
+    rule out. Flushing the Python buffer and then ``fsync`` is what makes "the
+    rename published real bytes" true rather than likely.
+
+    The failure this raises on is the one that matters. A filesystem with delayed
+    allocation reports a full disk or a failing device at ``fsync``, not at
+    ``write``; treating that as advisory would let the caller's rename replace
+    the last good file with a partial one and report success, which is the exact
+    data loss the sync is here to prevent. So a writeback error propagates, the
+    caller never reaches its rename, and the previous version stays published.
+
+    An errno in :data:`_SYNC_UNSUPPORTED_ERRNOS` says the platform has no sync
+    for this descriptor rather than that the write failed, and that is logged and
+    ignored: the atomicity the rename gives still holds where the durability
+    cannot be had.
+    """
+    fh.flush()
+    try:
+        os.fsync(fh.fileno())
+    except OSError as exc:
+        if exc.errno not in _SYNC_UNSUPPORTED_ERRNOS:
+            raise
+        logger.debug("fsync is unsupported for fd %s: %s", fh.fileno(), exc)
+
+
+def _write_tmp_then_publish(
+    tmp: Path,
+    resolved: Path,
+    write_body: Callable[[Any], None],
+    mode: str,
+    **open_kwargs: Any,
+) -> None:
+    """Write *tmp*, sync it to the device, then rename it onto *resolved*.
+
+    The temp file is the write's alone; nothing publishes it until the rename, so
+    a failure before the rename must not leave it behind. A writeback error
+    reported at ``fsync`` (:func:`_sync_before_publish`) is exactly such a
+    failure: on a full disk the sync raises, the rename is skipped, and the
+    half-written ``meta.json.tmp`` would otherwise sit on a disk that is already
+    out of room. Unlink it on any error before the rename, best-effort -- the
+    original error is what the caller must see, so a failure to clean up is
+    swallowed.
+    """
+    try:
+        with open(tmp, mode, opener=open_kwargs.pop("opener", None), **open_kwargs) as fh:
+            write_body(fh)
+            _sync_before_publish(fh)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    tmp.replace(resolved)
 
 
 def _prepare_store_write(resolved: Path, *, owner_only: bool) -> Callable[[str, int], int] | None:
@@ -2718,14 +2800,15 @@ class ArtifactStore:
         resolved = Path(os.path.realpath(path))
         if reason := _fence_refusal(resolved, "write"):
             raise ArtifactError(reason)
+        self._refuse_write_outside_root(path, resolved)
         # Atomic write: tmp file + rename. Inside the data home the tmp is 0600
         # before the first byte is written (created so, or narrowed when a crash
         # left one behind), so the published file is never readable by others.
         opener = _prepare_store_write(resolved, owner_only=self._owner_only)
         tmp = resolved.with_suffix(resolved.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8", opener=opener) as fh:
-            fh.write(text)
-        tmp.replace(resolved)
+        _write_tmp_then_publish(
+            tmp, resolved, lambda fh: fh.write(text), "w", encoding="utf-8", opener=opener
+        )
 
     def _read_bytes(self, path: Path) -> bytes:
         """Binary sibling of :meth:`_read_text` (image asset reads).
@@ -2771,6 +2854,39 @@ class ArtifactStore:
             raise ArtifactNotFoundError(f"image asset is not readable: {path.name}")
         return data
 
+    def _refuse_write_outside_root(self, asked: Path, resolved: Path) -> None:
+        """Refuse a write whose RESOLVED path has left the store.
+
+        Both writers resolve the path before opening it, which is what keeps the
+        sensitive-path fence honest -- but resolving is also what follows a link.
+        A symlink planted at a store file (``current.html``, a version, a
+        ``meta.json``) resolves to the link's target, and the fence only refuses a
+        target it considers sensitive: anywhere else, the write lands outside the
+        store at a path the artifact's own name does not point to.
+
+        The claim is scoped to what the CALLER asked for, which is what keeps
+        these two general-purpose helpers general: a path that never pointed into
+        the store makes no containment promise and is left to the fence alone
+        (``test_artifacts_pathres`` exercises them exactly that way). A path that
+        DID point into the store must still be in it once resolved -- so the only
+        thing refused here is a link that moved a store file out of the store.
+
+        The root's own realpath is the comparison, because a store rooted at a
+        symlinked data home is an ordinary setup and must keep working.
+        """
+        root = Path(os.path.realpath(self._root))
+        asked_abs = Path(os.path.abspath(asked))
+        if root not in asked_abs.parents:
+            return
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            raise ArtifactError(
+                f"refusing to write {asked}: it resolves to {resolved}, outside the "
+                f"artifact store at {root}. A link at that name would send the write "
+                f"somewhere the path does not name"
+            ) from None
+
     def _write_bytes(self, path: Path, data: bytes) -> None:
         """Binary sibling of :meth:`_write_text` (image asset writes).
 
@@ -2780,11 +2896,10 @@ class ArtifactStore:
         resolved = Path(os.path.realpath(path))
         if reason := _fence_refusal(resolved, "write"):
             raise ArtifactError(reason)
+        self._refuse_write_outside_root(path, resolved)
         opener = _prepare_store_write(resolved, owner_only=self._owner_only)
         tmp = resolved.with_suffix(resolved.suffix + ".tmp")
-        with open(tmp, "wb", opener=opener) as fh:
-            fh.write(data)
-        tmp.replace(resolved)
+        _write_tmp_then_publish(tmp, resolved, lambda fh: fh.write(data), "wb", opener=opener)
 
     def _prune_versions(self, slug: str) -> None:
         versions_dir = self._artifact_dir(slug) / "versions"
