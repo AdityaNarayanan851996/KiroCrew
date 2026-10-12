@@ -3313,6 +3313,8 @@ class TestCronServiceBridge:
             enabled=True,
             timezone="America/New_York",
             skip_dates=["2026-12-25"],
+            timeout=0,
+            timeout_secs=0,
             folder_id="",
         )
 
@@ -3487,6 +3489,8 @@ class TestCronServiceBridge:
             enabled=True,
             timezone="",
             skip_dates=None,
+            timeout=0,
+            timeout_secs=0,
             folder_id="",
         )
 
