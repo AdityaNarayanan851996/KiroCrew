@@ -1,6 +1,6 @@
 ---
 title: Work fold forgets closed items — bound a board by what is open, not by what it ever created
-status: draft
+status: accepted
 author: kirocrew agent session
 created: 2026-10-10
 last-audited: 2026-10-10
