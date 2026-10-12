@@ -216,6 +216,7 @@ from kiro_crew.dashboard.file_api.transfer import (  # noqa: F401
 from kiro_crew.dashboard.file_api.uploads import (  # noqa: F401
     _content_matches_ext,
     _content_mismatch_message,
+    _log_upload_diagnostic,
     _resolve_raster_ext,
     _sniff_media_type,
     _stream_media_part,
@@ -249,6 +250,11 @@ from kiro_crew.dashboard.state import (  # noqa: F401
     DashboardState,
     append_and_surface,
     load_window_off_loop,
+)
+from kiro_crew.dashboard.upload_limits import (  # noqa: F401
+    bytes_to_mb_figure,
+    knowledge_ceiling_bytes,
+    upload_max_bytes,
 )
 from kiro_crew.doc_blocks import extract_blocks  # noqa: F401
 from kiro_crew.doc_parser import extract_slides, extract_text, join_slides  # noqa: F401
