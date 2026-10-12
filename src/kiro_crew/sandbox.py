@@ -2130,10 +2130,13 @@ _CREW_NO_ALIAS_LEAVES: frozenset[str] = frozenset(
 #:   would turn an ordinary setup into a spawn failure for every agent on the host.
 #:
 #: Deliberately NOT here, having been checked for a supported second name and found to
-#: have none -- both resolve to one managed path with no override, so a link is not a
-#: relocation the product offers:
+#: resolve to one managed path on the platforms this mask runs, so a link is not a
+#: relocation the product offers here:
 #:
-#: * ``scratch`` -- ``agent_scratch.scratch_root()`` is ``config_dir() / "scratch"``;
+#: * ``scratch`` -- ``agent_scratch.scratch_root()`` honours a ``KIROCREW_SCRATCH_ROOT``
+#:   override, but only on Windows, where no Crew OS sandbox (and so no mask) runs; on
+#:   Linux and macOS the override is ignored and ``scratch_root()`` is always
+#:   ``config_dir() / "scratch"``, so the mask's scratch root is always the default;
 #: * ``work`` -- ``work_root.work_root()`` is ``config_dir() / "work"``, and the module
 #:   refuses a linked root at allocation and sweeps nothing through one;
 #: * ``backup`` -- no resolver in the tree reads an override for it either.
