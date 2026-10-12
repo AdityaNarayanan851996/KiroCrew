@@ -63,6 +63,7 @@ from kiro_crew.atomic_write import (
     fsync_dir,
     fsync_open_dir,
     pinned_parent_replace_supported,
+    read_bytes_with_retry,
     refuse_linked_parent,
 )
 from kiro_crew.config.paths import data_home
@@ -519,7 +520,7 @@ def _read_record(slug: str) -> dict[str, Any] | None:
     """
     path = instance_dir(slug) / _RECORD_FILE
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(read_bytes_with_retry(path).decode("utf-8"))
     except FileNotFoundError:
         return None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -693,7 +694,7 @@ def versions(slug: str) -> tuple[int, ...]:
 def _read_version(slug: str, version: int) -> dict[str, Any]:
     path = instance_dir(slug) / _VERSIONS_SUBDIR / f"{version}.json"
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(read_bytes_with_retry(path).decode("utf-8"))
     except FileNotFoundError:
         kept = versions(slug)
         raise InstanceRefused(
@@ -747,7 +748,7 @@ def _history_step(state: dict[str, Any], data: Mapping[str, Any]) -> None:
 def _read_history_state(slug: str) -> dict[str, Any] | None:
     path = instance_dir(slug) / _HISTORY_FILE
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(read_bytes_with_retry(path).decode("utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
     if not isinstance(raw, dict) or raw.get("schema") != SCHEMA_VERSION:
@@ -1436,7 +1437,7 @@ def staged_preview(slug: str) -> Preview | None:
     and the answer a caller can act on is the same one -- stage it again.
     """
     try:
-        raw = json.loads(_preview_path(slug).read_text(encoding="utf-8"))
+        raw = json.loads(read_bytes_with_retry(_preview_path(slug)).decode("utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
     if not isinstance(raw, dict) or raw.get("schema") != SCHEMA_VERSION:
