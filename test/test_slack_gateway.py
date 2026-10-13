@@ -7580,7 +7580,7 @@ class TestBgSessionDashboardBranch:
                 trace.append("url")
             real_print(*args, **kwargs)
 
-        async def _tracing_probe():
+        async def _tracing_probe(_sessions=None):
             trace.append("probe")
 
         fresh_event = asyncio.Event()
