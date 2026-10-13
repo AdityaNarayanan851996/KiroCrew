@@ -1109,6 +1109,8 @@ class _Session:
     # site and read by ``reset``: a session popped while its permit is held
     # remembers WHO held it, so that task's later key-only ``release`` is
     # absorbed instead of unlocking whatever successor now occupies the key.
+    # The release that ends a recorded holding clears it in the same step, so it
+    # never names a task that has let the permit go.
     turn_owner: Any = None
     # Set by the allocation layer when a claim or registration adopted entries a
     # forced stop parked (``session_lifecycle.adopt_parked_queue``); ``release``
@@ -2844,6 +2846,10 @@ class SessionManager:
     def is_compacting(self, key: str) -> bool:
         """Whether an automatic compaction is in flight on *key* right now."""
         return self._compaction.is_compacting(key)
+
+    def compaction_waits_for_turn(self, key: str) -> bool:
+        """Whether *key*'s compaction still waits for the turn holding the session."""
+        return self._compaction.compaction_waits_for_turn(key)
 
     def mark_needs_reinjection(self, key: str) -> None:
         """Mark a live session for one-shot context reinjection."""
