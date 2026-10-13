@@ -346,6 +346,7 @@ from kiro_crew.dashboard.chat_utils import (  # noqa: F401
     is_harness_slash_command,
     is_system_injection_item,
     mirror_is_paused,
+    open_construct_at_end,
     parse_workflow_command,
     remember_slack_options,
     restore_replacement_if_handover_did_not_land,
@@ -4493,6 +4494,11 @@ def _redact_segment_text(slot: _ChatSlot, text: str) -> tuple[str, list[dict], l
     return redacted, blocked_links, credential_records(matches, slot.credential_evidence)
 
 
+#: Window rows a tool group puts between a segment's chunk rows: the call row,
+#: the approval card a gated call appends, and a change card or guide offer.
+_TOOL_GROUP_ROLES = frozenset({"tool", "permission", "card"})
+
+
 def _flush_segment(
     state: DashboardState,
     slot: _ChatSlot,
@@ -4537,20 +4543,41 @@ def _flush_segment(
         except ValueError:
             return False
 
-    # Walk backwards to find the start of the trailing chunk/stop_event run.
-    boundary = len(slot.messages)
+    # Walk backwards over THIS segment's rows and split them into: chunk rows
+    # to drop, stop_events to re-land after the finalized message, and
+    # tool-group rows (tool, permission, card) to keep in place. The walk stops
+    # at the first row that is none of those — the previous persisted boundary —
+    # which marks the segment start. The tool-group set is the one the
+    # post-tool text fallback reads past: a permission row is the approval card
+    # a gated call appends, a card row is a change card or guide offer the
+    # group's own call puts in, and either can land between deferred chunks.
+    #
+    # A deferred cut (open_construct_at_end holds the boundary while a construct
+    # is open) lets an interleaved tool call land BETWEEN this segment's chunk
+    # rows, so some of the segment's chunks sit before a tool row rather than in
+    # one trailing run. Removing every chunk row from the segment start onward
+    # (not just a trailing run) clears them all; a chunk row left before a tool
+    # row would strand in the window, where a slot-detail reload renders it as a
+    # duplicate ``streaming`` bubble beside the finalized reply. The tool rows
+    # that interleave the chunks are kept in order. The rows are wire-only and
+    # never persisted, so this repairs the in-memory window only; nothing on
+    # disk changes.
+    segment_start = len(slot.messages)
     for i in range(len(slot.messages) - 1, -1, -1):
         role = slot.messages[i].get("role", "")
-        if role == "chunk" or _is_stop_event(slot.messages[i]):
-            boundary = i
+        if role == "chunk" or role in _TOOL_GROUP_ROLES or _is_stop_event(slot.messages[i]):
+            segment_start = i
         else:
             break
-    head = slot.messages[:boundary]
-    tail = slot.messages[boundary:]
+    head = slot.messages[:segment_start]
+    tail = slot.messages[segment_start:]
     trailing_stop_events = [m for m in tail if _is_stop_event(m)]
-    slot.messages = (
-        head  # drops chunks AND trailing stop_events; tail.non-chunk-non-stop stays in head
-    )
+    # Keep the tool-group rows of this segment in place; drop its chunk rows
+    # and pull its stop_events aside (re-landed after the finalized message).
+    kept_tool_rows = [
+        m for m in tail if m.get("role", "") in _TOOL_GROUP_ROLES and not _is_stop_event(m)
+    ]
+    slot.messages = head + kept_tool_rows
     # The window rewrite above is only half the release: append put each chunk
     # row in `_pending` as well, as the SAME dict, so the queue still owns every
     # token of this segment. This is the SUCCESS path — the one a long streamed
@@ -9068,6 +9095,13 @@ async def _run_chat(
         return injected
 
     assistant_text = ""
+    # The accumulated text at the last segment cut that was deferred because a
+    # construct was open (see open_construct_at_end). While `assistant_text`
+    # still starts with it, the pending segment holds text a cut was held back
+    # over, even if the construct has closed since, so a compaction reset must
+    # finalize it rather than clear it. Any reset of the accumulator breaks the
+    # prefix, which retires the marker without each reset site clearing it.
+    _deferred_cut_text = ""
     # Initialized HERE (not with the other turn-state flags below) because
     # _steer_segment_cut declares it nonlocal — mypy requires the binding to
     # exist textually before the nested def. Semantics unchanged: nothing
@@ -12591,7 +12625,15 @@ async def _run_chat(
                 # message so post-tool text starts a fresh message.
                 if in_tool_group:
                     _flush_text_stream()
-                    if assistant_text:
+                    _open_construct = open_construct_at_end(assistant_text)
+                    if assistant_text and _open_construct:
+                        _deferred_cut_text = assistant_text
+                        logger.debug(
+                            "segment cut deferred on %s — %s still open",
+                            slot.key,
+                            _open_construct,
+                        )
+                    elif assistant_text:
                         _flush_segment(state, slot, assistant_text)
                         assistant_text = ""
                         _turn_flushed_visible_text = True
@@ -12801,9 +12843,18 @@ async def _run_chat(
                 # but keep the streaming message in place for correct tool ordering.
                 _flush_text_stream()
                 if not in_tool_group and assistant_text:
-                    _flush_segment(state, slot, assistant_text, broadcast=False)
-                    assistant_text = ""
-                    _turn_flushed_visible_text = True
+                    _open_construct = open_construct_at_end(assistant_text)
+                    if _open_construct:
+                        _deferred_cut_text = assistant_text
+                        logger.debug(
+                            "segment cut deferred on %s — %s still open",
+                            slot.key,
+                            _open_construct,
+                        )
+                    else:
+                        _flush_segment(state, slot, assistant_text, broadcast=False)
+                        assistant_text = ""
+                        _turn_flushed_visible_text = True
                 # AFTER the flush, because seq is the order a reader folds on and
                 # the model narrating before it calls a tool is the common case:
                 # `_flush_segment` is what appends this turn's `message/sent`, so
@@ -14011,9 +14062,21 @@ async def _run_chat(
                 # cause of pills staying in "running" state until the next tool
                 # call or message end.
                 # Flush accumulated text as a finalized segment before the
-                # permission flow so the frontend renders them in order.
+                # permission flow so the frontend renders them in order. The
+                # same open-construct deferral as the tool-call cut applies: an
+                # approval-gated call (parent or child) that lands inside an
+                # open options marker, fence or widget would otherwise split it
+                # and undo a deferral the tool-call site just made.
                 _flush_text_stream()
-                if assistant_text:
+                _open_construct = open_construct_at_end(assistant_text)
+                if assistant_text and _open_construct:
+                    _deferred_cut_text = assistant_text
+                    logger.debug(
+                        "segment cut deferred on %s — %s still open",
+                        slot.key,
+                        _open_construct,
+                    )
+                elif assistant_text:
                     _flush_segment(state, slot, assistant_text)
                     assistant_text = ""
                     _turn_flushed_visible_text = True
@@ -15654,6 +15717,34 @@ async def _run_chat(
                         "chat_message",
                         {"slot": slot.key, "role": "compacting", "content": ""},
                     )
+                # Finalize the accumulated segment BEFORE the terminal notice is
+                # appended. _broadcast_compaction_result appends an `assistant`
+                # notice row, and _flush_segment's cleanup walks back only to the
+                # first non-chunk/non-tool row — so flushing after the notice
+                # would stop at it and strand this segment's chunk rows as a
+                # duplicate in-memory bubble. Only a segment a cut was deferred
+                # over is finalized here, whether or not its construct has closed
+                # since: that is the text a deferred cut leaves unflushed, and any
+                # other pre-compaction text keeps the plain reset below. The
+                # redactor's withheld tail is emitted first so the wire stream
+                # carries the whole segment before the reset discards the
+                # buffer. The leaked-call scan reads the accumulator here too,
+                # since the reset below empties it before the turn-end gates run.
+                if (
+                    not event.synthesized
+                    and event.text in ("completed", "failed")
+                    and _deferred_cut_text
+                    and assistant_text.startswith(_deferred_cut_text)
+                ):
+                    _compaction_dropped_leak = _compaction_dropped_leak or has_leaked_tool_call(
+                        assistant_text
+                    )
+                    _flush_text_stream()
+                    _flush_segment(state, slot, assistant_text, broadcast=False)
+                    assistant_text = ""
+                    _deferred_cut_text = ""
+                    _turn_flushed_visible_text = True
+                    _wsred.reset()
                 if _broadcast_compaction_result(state, slot, event):
                     saw_compaction = True
                     if event.text == "completed":
@@ -15670,19 +15761,20 @@ async def _run_chat(
                         # `assistant_text`, and clearing it here would delete the
                         # answer a backend produced AFTER compacting.
                         #
+                        # The deferred-text flush ran just above, BEFORE
+                        # _broadcast_compaction_result appended its notice, so it
+                        # could remove that segment's chunk rows without stopping
+                        # at the notice. When it ran, it also emptied
+                        # `assistant_text` and reset `_wsred`.
+                        #
                         # Scan for a leaked tool call BEFORE the reset: the
                         # turn-end leak gates read this accumulator, so a leak
                         # that streamed before the boundary is invisible to them
-                        # once it is cleared, and both decline on an empty
-                        # segment. The block already reached the user (chunks
-                        # stream to the wire as they arrive) and the boundary
-                        # does not flush, so without this the turn shows raw
-                        # invoke syntax, runs no tool, persists nothing and
-                        # explains nothing. Only the FACT survives the reset;
-                        # the text is gone by turn end, which is the defect.
-                        # OR-accumulated: a turn may cross more than one
-                        # boundary, and a leak dropped at an earlier one is not
-                        # un-reported by a later clean segment.
+                        # once it is cleared. OR-accumulated so a leak dropped at
+                        # an earlier boundary is not un-reported by a later clean
+                        # segment. When the hoisted path already emptied the
+                        # accumulator this reads "" and records nothing new; it
+                        # is the no-text terminal that relies on the scan here.
                         _compaction_dropped_leak = _compaction_dropped_leak or has_leaked_tool_call(
                             assistant_text
                         )
