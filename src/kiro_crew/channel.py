@@ -313,6 +313,23 @@ def _shell_base_binary(cmd: str) -> str | None:
     return base
 
 
+def _offerable_base_binary(cmd: str) -> str | None:
+    """The base a "Trust all <base> commands" consent may name, else None.
+
+    ``_shell_base_binary`` tokenizes in POSIX mode, where a backslash is an
+    escape, so the Windows path ``.\\deploy.bat`` derives ``.deploy.bat``: a
+    name the user never typed, and one that also covers a different file
+    literally called ``.deploy.bat``. A consent label must name what the user
+    read, so a first token holding a backslash gets no base offer and no base
+    grant; the exact-command tier still covers that command.
+    """
+    stripped = cmd.lstrip() if cmd else ""
+    first = stripped.split(None, 1)[0] if stripped else ""
+    if "\\" in first:
+        return None
+    return _shell_base_binary(cmd)
+
+
 # Anything that makes a command more than ONE plain invocation. Deliberately
 # broader than the enforcement splitter's operator set: over-matching here
 # fails toward "no per-command grant available", never toward a wider grant.
@@ -346,11 +363,15 @@ def _match_trusted_channel_command(cmd: str, agent: "ChannelAgent") -> str | Non
     Compound commands never match a base grant and only match an exact grant
     granted for that identical compound; there is no pattern language and no
     per-segment matching, so a grant can never cover text the user did not
-    read. Returns an audit label or None.
+    read. The base is derived with ``_offerable_base_binary``, the same rule the
+    card offers from: a first token holding a backslash has no base, because
+    POSIX tokenizing drops the backslash and ``n\\pm`` would otherwise match a
+    ``npm`` grant while Windows runs a different file. Returns an audit label
+    or None.
     """
     if cmd in agent._trusted_commands:
         return f"command:{cmd}"
-    base = _shell_base_binary(cmd)
+    base = _offerable_base_binary(cmd)
     if base is not None and base in agent._trusted_bases:
         return f"base:{base}"
     return None
@@ -1678,7 +1699,7 @@ async def _stream_task(
                 # ``_APPROVAL_FIELD_MAX_CHARS`` (the title was refused above if
                 # it would not fit, and the base is one token of that title);
                 # the raw command never leaves this scope.
-                _base_binary = _shell_base_binary(_cmd) if _command_grantable else None
+                _base_binary = _offerable_base_binary(_cmd) if _command_grantable else None
                 approval_meta: dict[str, str] = {
                     "tool_title": sanitized_name,
                     "tool_input": sanitized_input,
