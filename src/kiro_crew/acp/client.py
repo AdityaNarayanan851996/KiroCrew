@@ -1539,6 +1539,7 @@ async def _effective_prompt_timeout_async(timeout: float | None) -> float:
 
 
 _READ_TIMEOUT = 20.0
+_OPENCODE_PERMISSION_REFINEMENT_TIMEOUT = 2.0
 # After a compaction `completed` status, kiro-cli emits a fresh
 # `_kiro.dev/metadata` with the real post-compaction contextUsagePercentage
 # about ~1s later (live-probe confirmed). Wait up to this long for it so the
@@ -8875,6 +8876,57 @@ class AcpClient:
 
         return "skip"
 
+    async def _defer_opencode_shell_permission(self, msg: JsonRpcMessage, remaining: float) -> bool:
+        """Queue a matching command update before its OpenCode shell permission."""
+        params = msg.params if isinstance(msg.params, dict) else {}
+        tool_call = params.get("toolCall")
+        tool_call = tool_call if isinstance(tool_call, dict) else {}
+        tool_call_id = tool_call.get("toolCallId")
+        if (
+            not isinstance(tool_call_id, str)
+            or self._tool_call_is_shell.get(tool_call_id) is not True
+        ):
+            return False
+        cached = self._tool_call_params.get(tool_call_id, {})
+        if isinstance(cached, dict) and cached.get("command"):
+            return False
+
+        # OpenCode can ask permission before its command-bearing update. Read
+        # only the next frame to preserve unrelated event order. The request's
+        # own rawInput must never fill the trusted security cache.
+        following = await self._read_message(
+            timeout=min(_OPENCODE_PERMISSION_REFINEMENT_TIMEOUT, remaining)
+        )
+        if following is None:
+            return False
+
+        follow_params = following.params if isinstance(following.params, dict) else {}
+        update = follow_params.get("update")
+        update = update if isinstance(update, dict) else {}
+        raw_input = update.get("rawInput")
+        buffer_capacity = self._buffer.maxlen
+        if not (
+            following.is_method(METHOD_SESSION_UPDATE)
+            and isinstance(params.get("sessionId"), str)
+            and follow_params.get("sessionId") == params.get("sessionId")
+            and update.get("sessionUpdate") == "tool_call_update"
+            and update.get("toolCallId") == tool_call_id
+            and update.get("status") == "in_progress"
+            and isinstance(raw_input, dict)
+            and isinstance(raw_input.get("command"), str)
+            and raw_input["command"]
+            and not update.get("content")
+            and not update.get("rawOutput")
+            and (buffer_capacity is None or len(self._buffer) <= buffer_capacity - 2)
+        ):
+            self._buffer.appendleft(following)
+            return False
+
+        # The normal dispatcher caches the command before building permission.
+        self._buffer.appendleft(msg)
+        self._buffer.appendleft(following)
+        return True
+
     async def _prompt_loop(
         self,
         req_id: int,
@@ -9162,6 +9214,13 @@ class AcpClient:
                 self.last_prompt_stats.event_count += 1
 
                 action = self._process_message(msg, req_id)
+                if (
+                    action == "permission"
+                    and self.backend == ACP_BACKEND_OPENCODE
+                    and await self._defer_opencode_shell_permission(msg, remaining)
+                ):
+                    self.last_prompt_stats.event_count -= 1
+                    continue
                 # Single yield chokepoint: everything downstream (dispatch,
                 # chat runner, a human answering an approval card) runs while
                 # this generator is suspended here, so the whole gap is
