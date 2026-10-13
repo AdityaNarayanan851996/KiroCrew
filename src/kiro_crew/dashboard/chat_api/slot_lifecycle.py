@@ -155,7 +155,7 @@ async def _restore_slot_nudge_loop(
     The replacement carries the REMAINING budget, never a fresh one. ``add()``
     mints a new id and a new ``created_ts``, so the spent allowance is subtracted
     here instead: a failed close must not buy unattended cycles the user never
-    granted. A loop whose cycle cap or wall-clock budget is already spent is not
+    granted. A loop whose cycle cap or runtime budget is already spent is not
     restored at all (it was one tick from terminal), and neither is a paused one
     — reviving that would override an explicit stop.
     """
@@ -189,6 +189,7 @@ async def _restore_slot_nudge_loop(
         return
     try:
         from kiro_crew import autonudge  # circular: autonudge -> dashboard.chat -> chat_handlers
+        from kiro_crew.autonudge_service.model import runtime_elapsed
 
         svc = autonudge.get_instance()
         if svc is None:
@@ -204,7 +205,9 @@ async def _restore_slot_nudge_loop(
                 return
             # >=1: a budget of 0 means UNLIMITED, so a spent-to-the-second
             # remainder must not round into "no budget at all".
-            runtime_left = max(1, int(loop.max_runtime_secs - (time.time() - loop.created_ts)))
+            runtime_left = max(
+                1, int(loop.max_runtime_secs - runtime_elapsed(loop, loop.created_ts))
+            )
         await svc.add(
             loop.slot_key,
             loop.message,
