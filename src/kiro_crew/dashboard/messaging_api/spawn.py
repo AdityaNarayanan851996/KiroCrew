@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         internal_memory_scope,
         parent_spawn_allowlists,
         parent_work_supported,
+        spawn_parent_claim,
         validate_tool_args,
         warm_project_agents_for_spawn,
     )
@@ -250,7 +251,7 @@ async def api_spawn(request: web.Request) -> web.Response:
             status=400,
         )
     _, refusal = await internal_memory_scope(
-        request, "spawn.create", claimed_session=parent_session
+        request, "spawn.create", claimed_session=spawn_parent_claim(request, parent_session)
     )
     if refusal is not None:
         return refusal
@@ -544,7 +545,9 @@ async def api_spawn_continue(request: web.Request) -> web.Response:
     if not task:
         return web.json_response({"error": "task is required", "code": "task_required"}, status=400)
     parent_session = str(body.get("parent_session", "") or "")
-    refusal = await _spawn_scope_refusal(request, claimed_session=parent_session)
+    refusal = await _spawn_scope_refusal(
+        request, claimed_session=spawn_parent_claim(request, parent_session)
+    )
     if refusal is not None:
         return refusal
     try:
