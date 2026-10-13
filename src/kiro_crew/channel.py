@@ -24,13 +24,17 @@ from typing import Any
 
 from kiro_crew import name_grant, permission_floor
 from kiro_crew.atomic_write import atomic_write
-from kiro_crew.config import live
+from kiro_crew.config import KiroCrewConfig, live
+from kiro_crew.config.fields import _safe_int
+from kiro_crew.config.loader import config_local_path, config_path, read_config_text
 from kiro_crew.config.paths import config_dir
+from kiro_crew.config.resolution import _deep_merge
 from kiro_crew.constants import (
     DENY_CAUSE_APPROVAL_OVERSIZE,
     DENY_CAUSE_APPROVAL_TIMEOUT,
     DENY_CAUSE_POLICY,
     DENY_CAUSE_SURFACE_POLICY,
+    TOOL_APPROVAL_TIMEOUT,
 )
 from kiro_crew.llm_helpers import (
     SESSION_NOT_FOUND_GIVE_UP_TEXT,
@@ -58,8 +62,10 @@ _MAX_MESSAGES = 200
 # sees the whole command, and a cut title beside a live Approve button is an
 # approval of a suffix nobody read. The refusal notice is itself bounded.
 _APPROVAL_FIELD_MAX_CHARS = 500
-# How long a posted approval card waits for a reader before the HOST declines
-# it. Named so the in-band notice can quote the same figure the wait used.
+# The longest a posted approval card waits for a reader before the HOST
+# declines it, and the wait while ``agent.tool_approval_timeout_secs`` is left at
+# its default (see :func:`_channel_approval_window_secs`). The in-band notice
+# quotes the window the wait actually used.
 _APPROVAL_TIMEOUT_SECS = 3600
 # The card title of a grantable shell command is this prefix plus the command;
 # the exact tier sends the title back (minus the prefix) as its consent proof.
@@ -1261,6 +1267,58 @@ async def _recover_busy_agent(
     return None
 
 
+def _written_approval_window() -> int:
+    """``agent.tool_approval_timeout_secs`` as ``config.json`` and ``config.local.json`` state it.
+
+    The two documents merge the way the load merges them, the overlay winning key by
+    key. The number is read the way the load reads an integer (a numeric string or an
+    integral float counts, anything else reads as the default) and BEFORE the load's
+    clamps, so a number the loader pulls under the turn ceiling is still the number
+    that was written. The field default when neither document states a usable one.
+    """
+    default = int(TOOL_APPROVAL_TIMEOUT)
+    merged: dict = {}
+    for path in (config_path(), config_local_path()):
+        try:
+            document = json.loads(read_config_text(path))
+        except (OSError, ValueError):
+            continue
+        if isinstance(document, dict):
+            merged = _deep_merge(merged, document)
+    agent = merged.get("agent")
+    written = agent.get("tool_approval_timeout_secs") if isinstance(agent, dict) else None
+    return _safe_int(written, default)
+
+
+def _channel_approval_window_secs() -> int:
+    """How long an unanswered channel approval card waits before it is declined.
+
+    The loaded ``agent.tool_approval_timeout_secs``, capped at
+    :data:`_APPROVAL_TIMEOUT_SECS`, once the operator has written a number other than
+    its default. While the setting is absent or holds the default the card waits the
+    cap, and so it does when config cannot be read.
+
+    Whether a number was chosen is read from the documents
+    (:func:`_written_approval_window`), never from the loaded number or from the
+    key's presence. ``KiroCrewConfig.save`` writes every field, so a config nobody
+    edited carries the default. The loader pulls a window under
+    ``agent.chat_turn_timeout_secs``, which rewrites the number: under a 300 s ceiling
+    a saved 600 and a written 500 both load as 240, and an omitted key loads as 600.
+    Exactly the default cannot be pinned on a channel while any other number can.
+
+    The wait is the loaded number, so it carries the loader's clamps: into 30..7200 s,
+    then under the turn ceiling. A configured zero arrives as 30 s. Reads
+    ``config.json`` and ``config.local.json``: call it off the loop.
+    """
+    try:
+        window = KiroCrewConfig.load().agent.tool_approval_timeout_secs
+        chosen = _written_approval_window() != int(TOOL_APPROVAL_TIMEOUT)
+    except Exception:
+        logger.debug("channel approval window: config unavailable; using the cap", exc_info=True)
+        return _APPROVAL_TIMEOUT_SECS
+    return min(_APPROVAL_TIMEOUT_SECS, window) if chosen else _APPROVAL_TIMEOUT_SECS
+
+
 async def _stream_task(
     agent: ChannelAgent,
     channel: Channel,
@@ -1626,10 +1684,14 @@ async def _stream_task(
                     "base_command": _base_binary or "",
                 }
                 _approval_timed_out = False
+                _approval_window = _APPROVAL_TIMEOUT_SECS
                 try:
                     # Posting and waiting are one ownership scope. If the post
                     # itself fails, neither the Future nor its command authority
                     # may leak onto the next approval handled by this agent.
+                    # The window is read here, inside that scope, for the same
+                    # reason: a cancel while it is read still clears the Future.
+                    _approval_window = await asyncio.to_thread(_channel_approval_window_secs)
                     await channel.post(
                         agent.id,
                         f"⚠️ Approval needed: **{sanitized_name}**\n```\n{sanitized_input}\n```",
@@ -1638,9 +1700,7 @@ async def _stream_task(
                         thread_id=thread_id,
                         meta=approval_meta,
                     )
-                    decision = await asyncio.wait_for(
-                        approval_future, timeout=_APPROVAL_TIMEOUT_SECS
-                    )
+                    decision = await asyncio.wait_for(approval_future, timeout=_approval_window)
                 except asyncio.TimeoutError:
                     # Nobody answered: the HOST declines, not the reader.
                     # Recorded apart from the decision so the reject below can
@@ -1701,8 +1761,7 @@ async def _stream_task(
                         await _steer_host_deny(
                             client,
                             event,
-                            "the channel approval card went unanswered for "
-                            f"{_APPROVAL_TIMEOUT_SECS}s",
+                            f"the channel approval card went unanswered for {_approval_window}s",
                             cause=DENY_CAUSE_APPROVAL_TIMEOUT,
                             title=event.text or event.title or "",
                         )
