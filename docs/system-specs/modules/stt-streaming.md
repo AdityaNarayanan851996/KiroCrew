@@ -1119,13 +1119,58 @@ per session, because `WhisperEngine.ensure_loaded` settles residency before aski
 The digest is the second line of defence, not the first. Verifying and then handing a
 PATH to a native loader leaves a window in which the bytes can be swapped, and
 re-hashing cannot close it because the loader re-opens by name. What closes it is that
-`<data home>/models` is **write-protected from the agent on both gates**
-(`security._WRITE_PROTECTED_HOME_PATHS` for the file tools,
-`_WRITE_PROTECTED_BASH_LEAVES` for the shell), so the verified bytes are the loaded
-bytes. Reads stay allowed — the weights hold no secret and the settings surface reports
-what is installed — and Kiro Crew's own downloader writes directly without routing
-through those gates, so a first fetch and a re-download after a failed check both work.
+`<data home>/models` is **write-protected from the agent on both paths**
+(`security._WRITE_PROTECTED_HOME_PATHS` for the file tools, and the `models` leaf of
+`sandbox._CREW_READONLY_LEAVES`, mounted read-only for a shell). Both cover paths, so
+before a load `ModelStore._accept_existing` asks `sandbox.require_real_model_path`
+whether any name from `models` down to the weights is a symlink or junction. One that
+is refuses this model's load, and the download that would otherwise land through it,
+with a `failed` status flagged `refused` naming the path; sandboxed spawns and the
+other models are unaffected. A step below `models` sits inside the read-only seal, so
+only the host can have made such a link, and it threatens only the bytes this loader
+reads. A symlink or junction at the `models` name itself also refuses every spawn Kiro
+Crew seals, because that name sits in the writable data home. Keep the weights as real
+files under `models/`; to put them on another disk, relocate the whole data home
+(`KIROCREW_HOME`), so the seal covers them. A mount point at or under `models` is not
+checked: only the operator can create one on the host (a mount made inside the
+sandbox's namespace never reaches it), and a bind mount keeps its source path
+writable, so do not mount anything there. The check follows, reads and removes
+nothing; a missing name ends it, and a name that cannot be stat'ed refuses the load.
+Reads stay allowed — the
+weights hold no secret and the settings surface reports what is installed — and
+Kiro Crew's own downloader writes directly without routing through those gates, so a
+first fetch and a re-download after a failed check both work.
 The same directory holds the embedding GGUF, which the one entry covers.
+
+A second HARD LINK on the weights is judged here instead, at the gate that verifies
+them. `_verified_on_disk` opens the file once with `O_NOFOLLOW`, hashes it from that
+descriptor, and asks `sandbox.require_unaliased_model_file` about that same
+descriptor — so the inode judged and the inode hashed are one resolution, where a name
+check and a later `open` would be two. The question is asked BEFORE the first byte is
+read, and the inode's stamp (`st_ctime_ns`, `st_mtime_ns`, size, link count) must not
+move across the read: a check only at the end of the read loses a race in which a
+write through the alias lands in a chunk already hashed and the alias is then unlinked,
+so the final `fstat` sees one link while the digest still matches. A stamp that moves
+refuses the load the same way. An alias refuses that LOAD and nothing else:
+the bytes, the inode and both names are left as they are, because "unverified" would
+mean "download over it" (answering a condition only the operator can fix with a silent
+multi-gigabyte transfer) and deleting would remove one name of the operator's own file.
+The message names the file and the remedy: copy it to a temporary name in the same
+directory, then rename that copy over the path. `ModelStore.ensure` still returns
+`None` rather than raising: it records a `failed` status flagged `refused` (shown on
+the settings page like any failure), starts no download, and `ensure_loaded` reports
+that message instead of "not downloaded". Not on the spawn path, deliberately —
+`cp -al`, `hardlink`, `jdupes -L`, `rdfind -makehardlinks` and dotfile managers all
+produce this shape, and refusing a spawn for it would cost every sandboxed spawn on
+that host rather than one model load. (`rsync --link-dest` and rsnapshot rotation link
+snapshots to each other and leave the live file at `nlink 1`, so they do not reach it
+at all.) A sandboxed child cannot create the alias either: `link(2)` writes at the
+DESTINATION, one outside the seal is on another mount and answers `EXDEV`, and one
+inside the seal is refused by the read-only mount with `EROFS` (`EPERM`/`EACCES` under
+a path-based rule). The embedding GGUF beside the weights gets the same descriptor
+check at its own loader (`embeddings._model_file_stamp_unaliased`), and needs it more:
+it is size-only at load, so a second name is the only thing between a write and the
+next load. An aliased GGUF fails the embedder load, never a spawn.
 
 `is_present` also checks the file's size, which is what makes an interrupted
 download visible: a staging file never occupies the final path, so a wrong size
