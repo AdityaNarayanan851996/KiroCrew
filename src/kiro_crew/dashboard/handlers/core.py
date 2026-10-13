@@ -26,6 +26,7 @@ import kiro_crew
 import kiro_crew.config.resolution as _resolution
 from kiro_crew import aws_consent, beacon, platform_compat, stt
 from kiro_crew.acp_backends import selectable_backend_values
+from kiro_crew.apps.manifest import KEBAB_RE
 from kiro_crew.computer_use.types import MAX_SCREENSHOT_MAX_PX as _CU_MAX_SCREENSHOT_MAX_PX
 from kiro_crew.computer_use.types import MAX_TREE_NODES_LIMIT as _CU_MAX_TREE_NODES_LIMIT
 from kiro_crew.computer_use.types import MIN_SCREENSHOT_MAX_PX as _CU_MIN_SCREENSHOT_MAX_PX
@@ -3098,6 +3099,38 @@ _EDITABLE_CONFIG["decisions.nudge_wake.llm_model"] = {
 }
 
 
+# ``apps.<name>.model``, the model each app's row in Settings → Apps writes. Apps
+# install and uninstall while the gateway runs, so the path is matched by the
+# manifest's own name grammar (``KEBAB_RE``) rather than listed. The value is the
+# same kind of pin as the ``agent.role_models.*`` rows, with the same grammar and
+# entitlement validation; ``""`` INHERITS. It grants nothing: the session layer
+# withholds an id the account cannot run, as it does for every other pin.
+_APP_MODEL_SPEC: dict = {
+    "type": "str",
+    "max_len": 64,
+    "pattern": _MODEL_PIN_PATTERN,
+    "validate_fn": _validate_role_model,
+}
+
+
+def _editable_config_spec(path_key: object) -> dict | None:
+    """The PATCH spec for *path_key*: a listed field, or a per-app model path."""
+    if not isinstance(path_key, str):
+        return None
+    spec = _EDITABLE_CONFIG.get(path_key)
+    if spec is None:
+        parts = path_key.split(".")
+        # ``fullmatch``: ``KEBAB_RE``'s ``$`` also matches before a trailing newline.
+        if (
+            len(parts) == 3
+            and parts[0] == "apps"
+            and parts[2] == "model"
+            and KEBAB_RE.fullmatch(parts[1])
+        ):
+            return _APP_MODEL_SPEC
+    return spec
+
+
 def _beacon_governance_pinned_off() -> bool:
     """Return whether a ceiling pins ``capabilities.telemetry`` off (blocking).
 
@@ -3186,7 +3219,7 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
     value: Any = body.get("value")
     clamp_notice: dict | None = None
 
-    spec = _EDITABLE_CONFIG.get(path_key)
+    spec = _editable_config_spec(path_key)
     if not spec:
         # `agent.apps_allow_third_party` was deliberately REMOVED from the editable
         # set. It is not an ordinary preference: turning it off has to stop the code
