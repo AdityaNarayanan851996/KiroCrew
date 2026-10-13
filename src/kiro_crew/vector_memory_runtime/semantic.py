@@ -560,15 +560,8 @@ def write_value(
         metadata = record_meta.normalize_metadata(metadata) if metadata is not None else None
     except ValueError as exc:
         return (vm.SemanticRejectCode.CONFLICT, str(exc))
-    if metadata and metadata.get("subject") and metadata.get("predicate"):
-        with store._db_lock:
-            identity = store.db.execute(
-                "SELECT record_id FROM memory_record_meta WHERE scope=? AND subject=? "
-                "AND predicate=? AND status='active' AND kind IN ('fact','directive')",
-                (metadata.get("scope", ""), metadata["subject"], metadata["predicate"]),
-            ).fetchone()
-        if identity:
-            key = identity[0].removeprefix("key:")
+    with store._db_lock:
+        key = record_meta.identity_key(store.db, key, metadata)
     conflict = store._write_semantic(
         key,
         value_json,
