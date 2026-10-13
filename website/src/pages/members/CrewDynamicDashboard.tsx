@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Lock, RotateCw } from 'lucide-react'
 import { api, type DashboardManifest } from '../../api/client'
+import { apiErrorCode, isNotFoundError } from '../../api/apiError'
+import { retryPolicy } from '../../api/queryClient'
 import { Badge, Btn } from '../../components/ui'
 import ErrorNotice from '../../components/ErrorNotice'
 import { useTheme } from '../../hooks/useTheme'
@@ -9,7 +11,6 @@ import { useSandboxDoc } from '../../hooks/useSandboxDoc'
 import { useFrameOpenLink } from '../../hooks/useFrameOpenLink'
 import { buildSrcdoc, readThemeVars } from '../../lib/widgetSrcdoc'
 import { i18nT } from '../../i18n/t'
-import { apiErrorCode } from '../../api/apiError'
 import { useLanguage } from '../../i18n/LanguageProvider'
 import { MEMBER_DASHBOARD_QUERY_PREFIX, SESSION_DASHBOARD_QUERY_PREFIX } from '../../hooks/useWebSocket'
 
@@ -96,6 +97,13 @@ const READY_TIMEOUT_MS = 6000
  */
 export const DASHBOARD_FALLBACK_REFETCH_MS = 60_000
 
+/** The preview read's own "nothing staged" answer: 404 `no_preview`. Only that one.
+ *  The same route answers 404 `member_not_found` for a crewmate that is gone, and
+ *  that is a load failure the reader must be told about, not a preview that ended. */
+function isNothingStaged(e: unknown): boolean {
+  return isNotFoundError(e) && apiErrorCode(e) === 'no_preview'
+}
+
 interface Loaded {
   html: string
   manifest: DashboardManifest
@@ -123,6 +131,10 @@ interface Loaded {
  * 2. the mint SUCCEEDED and the document never beaconed. Nothing below the frame
  *    can see that, so the held `Loaded` is re-mounted and the new html is dropped
  *    until the next read brings a different one.
+ *
+ * With `preview` it renders the STAGED page instead -- the one `dashboard_preview`
+ * offered, read from the same route with `preview=1`. The host draws the one
+ * preview label above it (`DashboardPreviewLabel`) and drops it on `onPreviewGone`.
  */
 /** Whose dashboard this frame reads: a crewmate's, or one ROOT session's own page. */
 export type DashboardTarget =
@@ -184,6 +196,11 @@ export default function CrewDynamicDashboard({ target, displayName, onAct, previ
       ? (staged ? api.memberDashboard(target.slug, target.member, locale, true) : api.memberDashboard(target.slug, target.member, locale))
       : api.sessionDashboard(target.slot, locale, staged),
     enabled: target.kind === 'member' ? Boolean(target.slug) && Boolean(target.member) : Boolean(target.slot),
+    // Nothing staged is a 404 that a retry cannot change: the page was kept,
+    // discarded or expired. Every other failure keeps the client's own ladder.
+    ...(staged
+      ? { retry: (failureCount: number, error: unknown) => !isNothingStaged(error) && retryPolicy(failureCount, error) }
+      : {}),
     // THE FALLBACK, not the mechanism. Liveness comes from the two WS frames
     // `handleDashboardMoved` listens for; this is what covers the gap when one is
     // missed -- a dropped socket, a fold that advanced while the tab was closed, a
@@ -517,7 +534,7 @@ export default function CrewDynamicDashboard({ target, displayName, onAct, previ
   }
 
   return (
-    <div className="h-full min-h-0 flex flex-col" data-testid="crew-dashboard-frame">
+    <div className="h-full min-h-0 flex flex-col" data-testid="crew-dashboard-frame" data-preview={preview ? 'true' : undefined}>
       {lockBadge}
       {broken && (
         // The page on screen is the last one that parsed. Banded, never replaced: the

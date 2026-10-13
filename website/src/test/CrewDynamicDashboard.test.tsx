@@ -9,9 +9,10 @@
  * its case has ended lands a state update on whichever case runs next. The page
  * file mocks this component and pins only the identity it passes in.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { api, type DashboardManifest } from '../api/client'
+import { ApiError } from '../api/apiError'
 import { renderWithProviders } from './helpers'
 import CrewDynamicDashboard, {
   ACT_MESSAGE_TYPE,
@@ -542,5 +543,85 @@ describe('the lock badge', () => {
     renderWithProviders(<CrewDynamicDashboard target={{ kind: 'session', slot: 'chat-7' }} displayName="Root" />)
     expect(await screen.findByTestId('crew-dashboard-frame')).toBeInTheDocument()
     expect(screen.queryByTestId('crew-dashboard-lock-badge')).toBeNull()
+  })
+})
+
+describe('a preview link: the STAGED page, labelled as one', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    mints.length = 0
+    retries = 0
+    retrySpy.mockClear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function mountPreview(onPreviewGone?: (gone: boolean) => void) {
+    return renderWithProviders(
+      <CrewDynamicDashboard
+        target={{ kind: 'member', slug: 'oncall', member: 'oncall' }}
+        displayName="On Call"
+        preview
+        onPreviewGone={onPreviewGone}
+      />,
+    )
+  }
+
+  it('reads the staged page, not the live record', async () => {
+    const read = vi.spyOn(api, 'memberDashboard').mockResolvedValue(page({ preview: true }))
+    mountPreview()
+    await waitFor(() => expect(read).toHaveBeenCalledWith('oncall', 'oncall', 'en', true))
+    expect(read).not.toHaveBeenCalledWith('oncall', 'oncall', 'en')
+  })
+
+  it('draws it in the same sandbox and leaves the label to its host', async () => {
+    vi.spyOn(api, 'memberDashboard').mockResolvedValue(
+      page({ preview: true, rendered_html: '<!doctype html><title>staged</title>' }),
+    )
+    mountPreview()
+    const frame = await screen.findByTestId('crew-dashboard-iframe')
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts')
+    expect(mints[mints.length - 1]).toContain('<title>staged</title>')
+    expect(screen.getByTestId('crew-dashboard-frame')).toHaveAttribute('data-preview', 'true')
+    expect(screen.queryByTestId('dashboard-preview-badge')).toBeNull()
+  })
+
+  it('says plainly when nothing is staged any more, with no retry, and tells the host', async () => {
+    const read = vi
+      .spyOn(api, 'memberDashboard')
+      .mockRejectedValue(new ApiError(404, 'nothing is staged to preview', '{"code":"no_preview"}'))
+    const onGone = vi.fn()
+    mountPreview(onGone)
+    expect(await screen.findByTestId('crew-dashboard-preview-gone')).toHaveTextContent('This preview has closed.')
+    expect(screen.queryByTestId('crew-dashboard-error')).toBeNull()
+    expect(screen.queryByTestId('crew-dashboard-error-retry')).toBeNull()
+    expect(read).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onGone).toHaveBeenLastCalledWith(true))
+  })
+
+  it('any other 404 is a load failure, not a preview that ended', async () => {
+    // `member_not_found` comes off the same route for a crewmate that is gone. It
+    // keeps the client's ladder: one retry, one second later, then the error.
+    vi.useFakeTimers()
+    const read = vi.spyOn(api, 'memberDashboard').mockRejectedValue(
+      new ApiError(404, 'no crew member for this slug', '{"code":"member_not_found"}'),
+    )
+    mountPreview()
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('crew-dashboard-error')).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('crew-dashboard-error')).toBeInTheDocument()
+    expect(screen.queryByTestId('crew-dashboard-preview-gone')).toBeNull()
+  })
+
+  it('the live page is not marked as a preview', async () => {
+    vi.spyOn(api, 'memberDashboard').mockResolvedValue(page())
+    mount()
+    await screen.findByTestId('crew-dashboard-iframe')
+    expect(screen.getByTestId('crew-dashboard-frame')).not.toHaveAttribute('data-preview')
   })
 })
