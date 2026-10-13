@@ -6723,6 +6723,9 @@
       "this_document_is_tracked_as_a_session_artifact_n": "此文档被记录为会话产物，而非源文件更改",
       "toggle_diff": "显示或隐藏 {{path}} 的差异"
     },
+    "openFileChips": {
+      "open_file": "打开文件"
+    },
     "filePickerMenu": {
       "folder": "文件夹",
       "folder_kind": "文件夹",

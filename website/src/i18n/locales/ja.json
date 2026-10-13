@@ -6723,6 +6723,9 @@
       "this_document_is_tracked_as_a_session_artifact_n": "このドキュメントはセッションアーティファクトとして追跡されており、ソースファイルの変更ではありません",
       "toggle_diff": "{{path}} の差分を表示または非表示にする"
     },
+    "openFileChips": {
+      "open_file": "ファイルを開く"
+    },
     "filePickerMenu": {
       "folder": "フォルダー",
       "folder_kind": "フォルダー",

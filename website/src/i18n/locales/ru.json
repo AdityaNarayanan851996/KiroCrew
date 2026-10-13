@@ -7077,6 +7077,9 @@
       "this_document_is_tracked_as_a_session_artifact_n": "Этот документ отслеживается как артефакт сессии, а не как изменение исходного файла",
       "toggle_diff": "Показать или скрыть diff для {{path}}"
     },
+    "openFileChips": {
+      "open_file": "Открыть файл"
+    },
     "filePickerMenu": {
       "folder": "Папка",
       "folder_kind": "папка",

@@ -6959,6 +6959,9 @@
       "this_document_is_tracked_as_a_session_artifact_n": "Este documento se registra como artefacto de la sesión, no como un cambio en un archivo fuente",
       "toggle_diff": "Mostrar u ocultar el diff de {{path}}"
     },
+    "openFileChips": {
+      "open_file": "Abrir archivo"
+    },
     "filePickerMenu": {
       "folder": "Carpeta",
       "folder_kind": "carpeta",
