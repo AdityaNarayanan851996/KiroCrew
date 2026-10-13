@@ -11524,6 +11524,8 @@ class GatewayOrchestrator:
             lesson_store=LessonStore(),
             max_parallel_steps=self._cfg.taskrunner.max_parallel_steps,
             workspace_dir=self._cfg.taskrunner.workspace_dir,
+            test_cmd=self._cfg.taskrunner.test_command,
+            require_verification=self._cfg.taskrunner.require_verification,
         )
         self.task_runner._on_tool_approval = self._interactive_approval("taskrunner")
 
