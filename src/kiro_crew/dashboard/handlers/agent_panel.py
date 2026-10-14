@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import logging
 import time
 from collections.abc import Mapping
@@ -35,6 +36,8 @@ from aiohttp import web
 from kiro_crew import agent_panel, dashboard_agentic, dashboard_package, dashboard_types
 from kiro_crew import members as members_mod
 from kiro_crew import pipeline_board_contract
+from kiro_crew.artifact_store import dashboard_package as _dashboard
+from kiro_crew.artifact_store.model import ArtifactValidationError
 from kiro_crew.config.loader import KiroCrewConfig
 from kiro_crew.crew_log import emit as crew_log_emit
 from kiro_crew.crew_log import projection
@@ -56,6 +59,7 @@ from kiro_crew.memory_stores import UnknownMemoryStore
 from kiro_crew.sel import sel
 from kiro_crew.session_ledger import _APPEND_FLUSH_SECONDS
 from kiro_crew.validation import (
+    DASHBOARD_SAVE_SCHEMA,
     DASHBOARD_WRITE_SCHEMA,
     PANEL_PUBLISH_SCHEMA,
     ValidationError,
@@ -2018,6 +2022,215 @@ def _broadcast_changed(
         state.broadcast_ws_owners(msg_type, {"slot": slot})
 
 
+# --------------------------------------------------------------------------- #
+# Saving a composed page
+# --------------------------------------------------------------------------- #
+
+
+def _credential_shaped_names(package: Mapping[str, Any]) -> str:
+    """Where this package declares a name a redactor would mask, or ``""``.
+
+    ONE RULE, AND IT LIVES WITH THE READ MODULE. The scan itself is
+    ``member_dashboard.package_declared_name_spots``, which this route asks to
+    refuse the SAVE. Keeping the predicate in two places would be keeping two
+    rules, and the first thing the second one would do is drift.
+
+    It sits in the read's module rather than here because that is where the name
+    rule belongs: a staged page is an ordinary file under the crewmate's own
+    directory, so the save route is not its only writer and the rule must not be
+    one this route privately owns. Imported inside the function, like
+    ``read_fields`` above, because that module imports nothing from this one and
+    the pair must not become a cycle.
+
+    Why a refusal rather than a mask, what the three name sets are, and why a
+    POSITION comes back instead of the name: see that function.
+    """
+    from kiro_crew.dashboard.handlers.member_dashboard import package_declared_name_spots
+
+    return ", ".join(package_declared_name_spots(package))
+
+
+def _page_binding(slug: str) -> str:
+    """The ``bound_to`` for this caller's page, as the package spells it.
+
+    Derived from the slug ``_resolve_dashboard_caller`` resolved and NEVER from
+    the body. That resolution has already refused a caller with no dashboard
+    slot, an app identity, a cookie-only request and a slug more than one crew
+    answers to, so this string is the authorization decision in serialized form:
+    it is what the page hangs off, and it is the key the save looks the existing
+    page up by.
+
+    TWO SCOPES, because the grammar has two. ``_BOUND_TO_RE`` accepts
+    ``crewmate:<slug>`` or ``session:<slot key>``, and a ROOT SESSION's slug is
+    already the second form -- ``instance.session_instance_key`` spells it
+    ``session:<digest>``. So a session slug is returned AS IT STANDS and only a
+    member slug takes the prefix. Prefixing both built
+    ``crewmate:session:<digest>``, which the grammar refuses, and every
+    root-session save answered 400 ``invalid_package`` with no way for the agent
+    out: the argument schema refuses a caller-sent ``bound_to``, so the one key
+    that would have corrected the binding is the one key it may not send.
+
+    Keyed on the SLUG's own shape rather than on the absence of a crew name. The
+    two agree -- a session resolves with no member behind it -- but the slug is
+    what the grammar judges, and ``is_session_key`` is the function that answers
+    for it, so the test here and the test there cannot drift apart.
+    """
+    from kiro_crew.dashboard_templates import instance as instance_store
+
+    if instance_store.is_session_key(slug):
+        return slug
+    return f"crewmate:{slug}"
+
+
+async def api_dashboard_save(request: web.Request) -> web.Response:
+    """POST /api/agent-panel/dashboard/save -- STAGE the page the agent composed.
+
+    NOTHING IS STORED, NOTHING GOES LIVE, AND THERE IS NO LINK. The composed page
+    is staged beside the caller's record and the body hands back its field and
+    block counts. Both ways of going further are refused with
+    ``package_display_pending``, for two different reasons that happen to share a
+    code. The ``?preview=1`` read, because a STAGED page is neither an artifact nor
+    a binding: the hosted-page reader resolves a bound ``kind="dashboard"``
+    artifact, resolved from the caller's binding by ``member_dashboard``'s own
+    lookup, and ``member_dashboard._preview_record`` reads the staging file through
+    ``staged_preview``, which answers ``None`` for a package payload -- so there is
+    nothing for either to draw. And
+    ``dashboard_apply``, because binding one would leave ``dashboard_write``
+    refusing every agentic field this crewmate has (``package.from_package``),
+    which no change has lifted yet. So the reply's ``next`` tells the agent to
+    describe the page IN WORDS rather than offering a link -- a link here would
+    open the tab's load-error card, which is worse than none. The page the caller
+    is currently reading is untouched either way, which is what makes "here is a
+    dashboard I composed" cost nothing when the answer is no. The staging file is
+    the same one ``dashboard_preview`` writes, so one question is open at a time.
+
+    The body carries the three declarations -- ``model``, ``view`` and ``theme``
+    -- and the gateway supplies the other two keys of the package: ``kind``,
+    which is fixed, and ``bound_to``, which is the authorization decision. A
+    caller that sends either is refused by the argument schema rather than having
+    its value quietly dropped, because an agent told its save succeeded while the
+    page went elsewhere would send the same thing again every cycle.
+
+    THE PACKAGE IS GATED HERE AND STORED BYTES ARE WHAT IS STAGED, through the
+    store's own ``canonical_package_content``: the closed data-type and block-type
+    catalogs, the size cap measured on the bytes that actually get written, the
+    lone surrogate scan and the depth refusal. Checked at staging for
+    ``stage_preview``'s reason -- a package that could never be stored is the
+    agent's to fix while it is still composing, not something to discover after a
+    person has already approved it -- and the bytes a person is shown are then the
+    bytes an apply commits, so the two cycles cannot drift. The refusal comes back
+    whole: it names the key path and, for a closed catalog, the values that would
+    have been accepted, which is the list an agent recomposes from.
+
+    No store is opened and no binding is scanned. Both belong to the apply, which
+    is the call that writes.
+    """
+    resolved, refusal = await _resolve_dashboard_caller(request, "dashboard_save")
+    if refusal is not None:
+        return refusal
+    assert resolved is not None
+    slug, _crew_name, _slot = resolved
+    body = await _instance_body(request)
+    if isinstance(body, web.Response):
+        return body
+    try:
+        args = validate_tool_args(body, DASHBOARD_SAVE_SCHEMA)
+    except ValidationError as exc:
+        # Where a caller-sent ``bound_to`` or ``kind`` lands: a ToolSchema refuses
+        # an unknown key by name, so the sentence tells the agent which key it may
+        # not set. Reported as the validation failure it is rather than as a
+        # package refusal, because the package was never built.
+        return web.json_response({"error": str(exc), "code": "validation_error"}, status=400)
+
+    binding = _page_binding(slug)
+    package = {
+        "kind": _dashboard.DASHBOARD_KIND,
+        "bound_to": binding,
+        "model": args.get("model"),
+        "view": args.get("view"),
+        "theme": args.get("theme"),
+    }
+    where = _credential_shaped_names(package)
+    if where:
+        # REFUSED HERE, before anything is written, and by the page's own rule. The
+        # read refuses a package whose declared names a redactor would rewrite, and
+        # it refuses the WHOLE read, because a field name is a join key. So a save
+        # that stored one would succeed and hand the crewmate a page that can never
+        # render once a renderer exists -- the refusal keeps an unservable package
+        # out of the store rather than letting it be saved and fail to render later.
+        return web.json_response(
+            {
+                "error": (
+                    "a dashboard package cannot declare a name a redactor would mask: "
+                    f"{where} looks like a credential, and the page refuses a whole "
+                    "read rather than rewriting such a name, because every name a "
+                    "package declares is a JOIN KEY -- a field name joins the read's "
+                    "fields, the frame's blocks and the page's cells, and a theme "
+                    "token is the CSS variable the page's own style references. "
+                    "Rename it to something a reader recognises -- a name is shown "
+                    "to the person, so 'open_prs' and '--accent', not a token"
+                ),
+                "code": "unsafe_declared_name",
+            },
+            status=400,
+        )
+
+    from kiro_crew.dashboard_templates import instance as instance_store
+
+    def _stage() -> dict[str, Any]:
+        # THE STORE'S OWN WRITE GATE, run here and run on a thread: it parses,
+        # validates against the closed catalogs and re-serializes, and the result
+        # is the exact byte string an apply will hand the store. Staging the
+        # caller's bytes instead would mean the page a person looked at and the
+        # page that gets committed are two different strings.
+        content = _dashboard.canonical_package_content(json.dumps(package, ensure_ascii=False))
+        return instance_store.stage_package_preview(slug, content=content).wire()
+
+    try:
+        staged = await asyncio.to_thread(_stage)
+    except ArtifactValidationError as exc:
+        # WHOLE, like a refused agentic write. The package refusal names the key
+        # path, what was wrong with it and -- for a closed catalog -- the values
+        # that would have been accepted, which is the list an agent recomposes
+        # from. A generic failure costs it a cycle and teaches it nothing.
+        return web.json_response({"error": str(exc), "code": "invalid_package"}, status=400)
+    except Exception as exc:
+        logger.warning("a dashboard page for %s could not be staged", slug, exc_info=True)
+        return web.json_response(
+            {"error": f"the page could not be staged: {exc}", "code": "save_failed"}, status=503
+        )
+
+    # NO BROADCAST, and now for a second reason beyond the one below: nothing a
+    # reader can see has changed. The live page is still the live page, and a frame
+    # announcing a staged one would make an open tab refetch a document identical
+    # to the one it holds.
+    #
+    # The sibling instance routes send ``dashboard_instance_changed`` on an APPLY,
+    # which is where this page's own frame belongs too.
+    return web.json_response(
+        {
+            "ok": True,
+            # STAGED, not saved, and the key says so: an agent that read `saved`
+            # here would tell the person their dashboard had changed, and the next
+            # thing it has to do is ask them.
+            "staged": staged,
+            # THE ONE INSTRUCTION, in the response rather than only in the prompt.
+            # An agent that composed a page has to be told what it can do with it,
+            # and on this base the answer is "describe it", not "open a link":
+            # there is no link and no apply, so a `next` that named either would
+            # send the person to an error card and the agent to a 409.
+            "next": (
+                "describe the page you composed IN WORDS -- its fields and blocks -- and do "
+                "not offer a link: on this build a composed page cannot be shown or put in "
+                "force, so there is no preview to open and dashboard_apply answers "
+                "`package_display_pending` and binds nothing. The page in force is "
+                "unchanged. A page left staged for more than "
+                f"{instance_store.MAX_PREVIEW_AGE_MS // 60_000} minutes has to be saved again"
+            ),
+        }
+    )
+
+
 def _record_refusal(state: DashboardState, sk: str, entry: dict[str, Any]) -> bool:
     """Append one refusal to the caller's own log. Best-effort, never raises.
 
@@ -2283,6 +2496,63 @@ def _dashboard_block(slug: str) -> str:
     return dashboard_agentic.turn_block(slug)
 
 
+async def _apply_staged_package(
+    request: web.Request, slug: str, crew_name: str, slot: str
+) -> web.Response | None:
+    """Answer an apply when a COMPOSED PACKAGE is staged for *slug*, or ``None``.
+
+    REFUSED, NOT COMMITTED, and the reason is the WRITE guard rather than the
+    reader. `api_member_dashboard` draws a BOUND `kind="dashboard"` artifact
+    through `member_dashboard._serve_package`, so a page in force is drawable.
+    What is not in place is a lift of this module's own
+    `dashboard_write` guard: `package.from_package` refuses every agentic field
+    write while a package is bound, and no agent verb unbinds it --
+    `dashboard_rollback` restores a template version and a v1 cannot be reverted
+    away. So binding one here costs the caller every field it can still write.
+    Until that guard and this path are lifted together, this refuses the apply and
+    leaves the staged page in place: saving and staging keep working, nothing is
+    bound, and the page the caller already has keeps updating.
+
+    ``None`` means no package is staged, which is the caller's signal to try the
+    template path; it is not a refusal, because a staged template is an ordinary
+    thing to find here, and the template apply path is unchanged. The check is a
+    plain read off the staging file -- no lock, no write -- so a staged package is
+    left exactly as it was for the person to look at.
+    """
+    from kiro_crew.dashboard_templates import instance as instance_store
+
+    # REFUSED, NOT COMMITTED, until the `from_package` write guard is lifted with it.
+    # Binding a package leaves the live page's agentic writes refused with
+    # `package_display_pending` (this module's own `dashboard_write` guard,
+    # `package.from_package`), with no agent verb back: `dashboard_rollback` restores a
+    # template version and a v1 cannot be reverted away. The READER is not what is
+    # missing -- `member_dashboard` draws a bound package -- it is that guard, so an
+    # apply here costs the caller every field write it has. So a package can be saved
+    # and staged, and applying it is refused: nothing gets bound, nothing freezes, and
+    # the page the caller already has keeps updating.
+    #
+    # A plain READ, no lock and no write, so the staged page is left exactly as it was
+    # for the person to look at. `None` for the template case keeps the template apply
+    # path below completely unchanged.
+    staged_package = await asyncio.to_thread(instance_store.staged_package_preview, slug)
+    if staged_package is None:
+        return None
+    logger.info("dashboard: %r's apply of a staged package is pending a renderer", slug)
+    return web.json_response(
+        {
+            "error": (
+                "this page can be staged, but it cannot be put in force yet: binding a "
+                "composed package on this build stops every dashboard_write for this "
+                "crewmate, with no call that undoes it, so applying it would cost you "
+                "the fields you can still write today. The staged page is kept -- a "
+                "later change lifts that write refusal and this one together"
+            ),
+            "code": dashboard_agentic.PACKAGE_DISPLAY_PENDING,
+        },
+        status=409,
+    )
+
+
 async def api_dashboard_apply(request: web.Request) -> web.Response:
     """POST /api/agent-panel/dashboard/apply -- keep the staged page.
 
@@ -2291,6 +2561,14 @@ async def api_dashboard_apply(request: web.Request) -> web.Response:
     A body naming a template here would let the thing applied differ from the thing
     looked at, and the agent in between is the one place that difference would not be
     visible to anybody.
+
+    TWO KINDS OF STAGED PAGE, one call, and only one of them can be applied here. A
+    staged COMPOSED PACKAGE is REFUSED with ``package_display_pending`` and nothing is
+    written or bound -- see :func:`_apply_staged_package` for why binding a page no
+    renderer draws would freeze the crewmate's live one. A staged TEMPLATE becomes a
+    new instance version as before, unchanged by this PR. Which one is staged is the
+    staging file's to say, not the caller's, for the reason this route takes no
+    arguments at all.
     """
     resolved, refusal = await _resolve_dashboard_caller(request, "dashboard_apply")
     if refusal is not None:
@@ -2303,7 +2581,17 @@ async def api_dashboard_apply(request: web.Request) -> web.Response:
     def _apply() -> Any:
         return instance_store.apply_preview(slug, session_id=_history_session(slot))
 
+    # THE PACKAGE PRECHECK IS INSIDE THE BOUNDARY, not before it. Its own store read
+    # reaches `instance_dir`, whose link guard raises `InstanceError` -- not an
+    # `OSError`, so `_preview_payload`'s except list does not catch it and it escapes
+    # `staged_package_preview`. Called outside this `try` it left the route as an
+    # unhandled 500 while its sibling read answered the JSON 503 `store_failed` that
+    # an agent can act on, so the one route answered the same fault two ways
+    # depending on which half of it ran first.
     try:
+        packaged = await _apply_staged_package(request, slug, crew_name, slot)
+        if packaged is not None:
+            return packaged
         record = await asyncio.to_thread(_apply)
     except Exception as exc:
         return _instance_refusal(exc)
@@ -2384,6 +2672,12 @@ def register_agent_panel_routes(app: web.Application) -> None:
     # crewmate and nobody else's to read.
     app.router.add_get("/api/agent-panel/dashboard/types", api_dashboard_types)
     app.router.add_post("/api/agent-panel/dashboard/write", api_dashboard_write)
+    # The save. Under the same prefix for the same reason, and with one more of its
+    # own: it STAGES A PAGE BOUND TO A CREWMATE -- the file it writes sits in that
+    # crewmate's own directory and the binding stamped on it is taken from the caller
+    # this prefix's gate vetted. A cookie-only caller reaching it could name any live
+    # session and stage a page against whatever crew that resolved to.
+    app.router.add_post("/api/agent-panel/dashboard/save", api_dashboard_save)
     # The page's own four, under the same prefix and so with the same auth. A preview
     # and an apply reach a crewmate's instance store and its crew log, so a caller
     # holding only a dashboard cookie must not reach them either.

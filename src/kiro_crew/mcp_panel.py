@@ -208,6 +208,86 @@ def _tool_definitions() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "dashboard_save",
+            "description": (
+                "STAGE the page you composed as YOUR crewmate's Dashboard. A page "
+                "is three declarations and this call stages all three at once: a "
+                "`model` naming the fields the page holds and where each value "
+                "comes from, a `view` laying out the blocks that draw them, and a "
+                "`theme` of tokens. Read dashboard_fields first -- it tells you "
+                "the page in force -- and ASK the person before you save, because "
+                "the page is theirs and one changed without asking is one they "
+                "have to undo. A field reads either from a crew-log fold "
+                '(`{"fold": <name>, "path": <dotted keys>}`, filled by the '
+                'gateway) or from you (`{"agentic": true}`) -- never a number you '
+                "type into the layout, which would be true only at the moment you "
+                "typed it. The "
+                "block types and data types come from a CLOSED catalog, so a "
+                "package naming one that does not exist is refused and the refusal "
+                "lists the ones that do: recompose from that list. NAME YOUR FIELDS "
+                "AND BLOCKS FOR A READER -- `open_prs`, not a token. A name a "
+                "redactor would mask is refused, because a name is a key the page "
+                "joins its cells by and cannot be rewritten on the way out; the "
+                "refusal tells you which position to rename. Values never version "
+                "and never belong in a package. NOTHING IS STORED, AND THERE IS NO "
+                "LINK TO SHOW: this call stages the page and hands you back its "
+                "field and block counts. A staged page can be neither shown nor "
+                "put in force on this build -- dashboard_apply of one, and its "
+                "`?preview=1` read, both answer `package_display_pending`, change "
+                "nothing and leave the staged page in place. Applying is refused "
+                "because binding a composed page stops every dashboard_write you "
+                "have, with no call that undoes it. So DESCRIBE the page to the "
+                "person IN WORDS -- the fields it holds and the blocks that lay "
+                "them out -- and do not offer a link to open: there is none, and "
+                "the tab turns that refusal into a load error. A later change "
+                "lifts both refusals together. The staged "
+                "page expires, and a stale one has to be saved again. Two things "
+                "still belong to the "
+                "template path -- dashboard_fields lists the TEMPLATE page's "
+                "fields, and dashboard_rollback restores a template version, not "
+                "one of yours. The page in force is untouched by a save, so tell "
+                "the person the page is staged rather than that their tab draws it."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "type": "object",
+                        "description": (
+                            "The fields the page holds, as "
+                            '`{"types": {<field_name>: {...}}}`. Each field names '
+                            "a data type (`number`, `text`, `bool`, `timestamp`, "
+                            "`enum`) and a `source`, and may carry a `label` and "
+                            "`description` a reader sees. Field names are "
+                            "lowercase letters, digits and underscores."
+                        ),
+                    },
+                    "view": {
+                        "type": "object",
+                        "description": (
+                            'The layout, as `{"blocks": [...]}`, in the order a '
+                            "reader meets them -- that order IS the layout. Each "
+                            "block carries an `id`, a `type` from the block "
+                            "catalog, the `fields` it draws (every one declared by "
+                            "the model) and an optional `title`."
+                        ),
+                    },
+                    "theme": {
+                        "type": "object",
+                        "description": (
+                            'Look, as `{"tokens": {"--name": "value"}}`, with an '
+                            'optional `"css"` string beside it for rules the '
+                            "tokens cannot express. None of "
+                            "the look is fixed by the product, so this is where "
+                            "you set it. An empty `tokens` object is valid and "
+                            "takes the defaults."
+                        ),
+                    },
+                },
+                "required": ["model", "view", "theme"],
+            },
+        },
+        {
             "name": "dashboard_templates",
             "description": (
                 "List or SEARCH the dashboard pages this gateway can give your "
@@ -270,13 +350,19 @@ def _tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "dashboard_apply",
             "description": (
-                "Keep the page you previewed. This is the answer to the person "
-                "saying yes, and it takes NO arguments on purpose: what it "
-                "installs is the page that was staged, so it cannot differ from "
-                "the one they were shown. The previous version stays on disk, so "
-                "dashboard_rollback can go back to it. Refused with "
-                "`dashboard_locked` while the page is locked (your [DASHBOARD] "
-                "block says LOCKED). While locked you can still preview."
+                "Keep the page that is staged -- the one you previewed with "
+                "dashboard_preview, or the one you composed with dashboard_save. "
+                "This is the answer to the person saying yes. It takes NO arguments "
+                "on purpose: what it installs is the page that was staged, so it "
+                "cannot differ from the one they were shown. A TEMPLATE page goes "
+                "live and its previous version stays on disk, so dashboard_rollback "
+                "can go back to it. A COMPOSED PACKAGE cannot go live on this base "
+                "-- putting one in force stops every dashboard_write you have, with "
+                "no call back -- so applying a staged package is refused with "
+                "`package_display_pending`; a later change lifts that. Refused with "
+                "`dashboard_locked` while the page is locked "
+                "(your [DASHBOARD] block says LOCKED). While locked you can still "
+                "preview."
             ),
             "inputSchema": {"type": "object", "properties": {}},
         },
@@ -444,6 +530,36 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
             + (" It corrected an earlier refused write." if d.get("corrected") else "")
         )
 
+    if name == "dashboard_save":
+        # THE THREE, named one by one rather than forwarded as ``args``. The
+        # gateway fills the package's other two keys -- ``kind`` and the
+        # ``bound_to`` that decides whose tab renders this page -- from the caller
+        # it vetted, so building the payload from an explicit list is what makes a
+        # fourth key impossible to pass through from here. The gateway refuses one
+        # too; this is the half that cannot send it.
+        page: dict[str, Any] = {}
+        for key in ("model", "view", "theme"):
+            part = args.get(key)
+            if not isinstance(part, dict):
+                return (
+                    f"Error: `{key}` must be an object -- a page is a `model`, a "
+                    "`view` and a `theme`, and all three are saved together"
+                )
+            page[key] = part
+        sk, err = _strict_session_key()
+        if err:
+            return err
+        d = _post("/api/agent-panel/dashboard/save", page, session_key=sk)
+        api_err = d.get("error")
+        if api_err:
+            # WHOLE, like a refused write. A package refusal names the key path,
+            # what was wrong with it, and for a closed catalog the values that
+            # would have been taken -- which is the list the next compose is built
+            # from. Shortened to a generic failure it would cost a cycle and teach
+            # nothing.
+            return redact(f"Error: {api_err}")
+        return redact(_render_staged(d.get("staged") or {}, str(d.get("next") or "")))
+
     if name == "dashboard_templates":
         query = args.get("query")
         if query is not None and not isinstance(query, str):
@@ -488,6 +604,9 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
         api_err = d.get("error")
         if api_err:
             return redact(f"Error: {api_err}")
+        # A package apply is refused by the route (`package_display_pending`) and
+        # returns above as an error, so a successful apply here is a TEMPLATE one:
+        # an instance version and a template id.
         return redact(
             f"Your crewmate's page is now version {d.get('instance_version')}, "
             f"from template `{d.get('template_id')}`." + _guide_tail(d)
@@ -526,6 +645,39 @@ def _guide_tail(d: dict[str, Any]) -> str:
     """
     block = d.get("dashboard")
     return f"\n\n{block}" if isinstance(block, str) and block else ""
+
+
+def _render_staged(staged: dict[str, Any], note: str) -> str:
+    """What is STAGED, and what an agent may do with it on this base.
+
+    NO LINK, because there is none to give: the save reply carries no
+    ``preview_url`` and the package read answers ``package_display_pending``, which
+    the tab draws as a load error with a Retry button. So the counts lead, and the
+    line under them says the page cannot be shown or applied here and has to be
+    described in words instead -- the one thing an agent can actually do with it.
+
+    The route's own ``next`` sentence is passed through rather than restated here.
+    It carries the expiry window, which is the gateway's number -- a copy of it in
+    this process is one deploy away from telling an agent to re-save at the wrong
+    time.
+    """
+    lines = [
+        f"STAGED, not live: {staged.get('fields')} field(s) in "
+        f"{staged.get('blocks')} block(s). Nothing on your crewmate's Dashboard has "
+        "changed yet, and nothing is stored."
+    ]
+    if note:
+        lines.append("")
+        lines.append(f"Next: {note}")
+    lines.append("")
+    lines.append(
+        "A staged page cannot be shown or put in force on this build: there is no "
+        "preview to open, and dashboard_apply answers `package_display_pending` and "
+        "binds nothing -- putting one in force would stop every dashboard_write you "
+        "have, with no call back. Describe the fields and blocks you composed in words "
+        "when you tell the person about it. A later change lifts both refusals."
+    )
+    return "\n".join(lines)
 
 
 def _render_templates(payload: dict[str, Any]) -> str:
