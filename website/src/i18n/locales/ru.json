@@ -455,7 +455,9 @@
       "send": "Отправить",
       "send_message": "Отправить сообщение",
       "session_ready_type_a_message_to_start": "Сессия готова. Введите сообщение, чтобы начать.",
-      "streaming": "потоковая передача"
+      "streaming": "потоковая передача",
+      "attachments_not_allowed": "Это приложение не принимает файлы. Прикрепи их в разделе «{{page}}».",
+      "uploading_files": "Загрузка файлов…"
     },
     "chatMessageList": {
       "copied": "Скопировано!",

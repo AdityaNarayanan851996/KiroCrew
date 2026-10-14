@@ -441,7 +441,9 @@
       "send": "Enviar",
       "send_message": "Enviar mensaje",
       "session_ready_type_a_message_to_start": "Sesión lista. Escribe un mensaje para empezar.",
-      "streaming": "en streaming"
+      "streaming": "en streaming",
+      "attachments_not_allowed": "Esta app no acepta archivos. Adjúntalos en «{{page}}».",
+      "uploading_files": "Subiendo archivos…"
     },
     "chatMessageList": {
       "copied": "¡Copiado!",
