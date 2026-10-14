@@ -106,12 +106,11 @@ def _pinned_kiro_cli_version(monkeypatch):
 def kas_readiness_wire(monkeypatch, tmp_path):
     """Real demux and session startup; only the subprocess and clock are fake.
 
-    The fake stdout is an ``asyncio.StreamReader`` built here at (synchronous)
-    fixture-setup time, so its loop is pinned to the one current then rather than
-    the loop pytest-asyncio runs the test on. ``_start_reader`` re-points the
-    reader at the running loop before it first awaits, which is where the
-    cross-loop ``readuntil`` waiter would otherwise be created -- see the comment
-    there.
+    The fake stdout is a ``_RunningLoopStreamReader`` (see ``_make_runtime``): a
+    StreamReader that binds its loop lazily, the first time a read suspends, so it
+    picks up the loop pytest-asyncio runs the test on rather than the synchronous
+    fixture-setup loop. Any consumer of ``rt._process.stdout`` gets a correctly-
+    bound reader, not only tests that start it through ``_start_reader``.
     """
     from types import SimpleNamespace
 
@@ -318,6 +317,44 @@ def kas_readiness_wire(monkeypatch, tmp_path):
         tags=tags,
         handshake=handshake,
     )
+
+
+@pytest.mark.asyncio
+async def test_kas_readiness_wire_stdout_reads_on_the_running_loop(kas_readiness_wire):
+    """A consumer that reads ``rt._process.stdout`` directly must not hit the
+    cross-loop error the fixture once needed ``_start_reader`` to paper over.
+
+    A plain ``StreamReader`` pins its loop at construction, so one built on a
+    synchronous fixture-setup loop would create its ``readuntil`` waiter on that
+    loop and, from a test running on a different loop, raise ``RuntimeError: got
+    Future attached to a different loop``. The fixture's reader binds its loop
+    lazily on the first suspending read, so it picks up the running loop for any
+    consumer -- including this one, which drives stdout directly without going
+    through ``_start_reader``. The read must suspend (partial data, no delimiter
+    yet) to create that waiter; a line already complete in the buffer returns
+    without one and would not exercise the bug.
+    """
+    wire = kas_readiness_wire
+    stdout = wire.runtime._process.stdout
+    assert isinstance(stdout, asyncio.StreamReader)
+    # Feed a partial line so readuntil must suspend and create its waiter on the
+    # reader's bound loop; complete the line from a task on the running loop. The
+    # read is bounded by ``default_timeout()`` (half the test's budget, >= the
+    # wait-discipline floor) so a wrong-loop regression fails this test by name
+    # instead of hanging into the runner's worker-killing timeout (rule D8).
+    stdout.feed_data(b'{"ok": tr')
+
+    async def _complete() -> None:
+        await asyncio.sleep(0)
+        stdout.feed_data(b"ue}\n")
+
+    completer = asyncio.ensure_future(_complete())
+    try:
+        line = await asyncio.wait_for(stdout.readuntil(b"\n"), timeout=default_timeout())
+    finally:
+        completer.cancel()
+        await asyncio.gather(completer, return_exceptions=True)
+    assert json.loads(line) == {"ok": True}
 
 
 @pytest.mark.asyncio
@@ -950,14 +987,66 @@ def _spawn_client_mod():
     return client_mod
 
 
-def _make_runtime():
+class _RunningLoopStreamReader(asyncio.StreamReader):
+    """A ``StreamReader`` that binds its event loop to the RUNNING loop, resolved
+    lazily on the first read that has to suspend rather than eagerly pinned at
+    construction.
+
+    ``asyncio.StreamReader.__init__`` resolves ``get_event_loop()`` immediately,
+    pinning the reader to whatever loop was current then. A fake stdout built at
+    synchronous fixture-setup time is thus pinned to the setup loop; under a
+    ``pytest-asyncio`` whose test loop differs, the ``readuntil`` waiter --
+    created from ``_loop`` -- would belong to the wrong loop and raise "got
+    Future attached to a different loop". Deferring the bind to the first
+    ``_wait_for_data`` (which only ever runs inside the test's running loop)
+    picks up the right loop for any consumer of the reader, without reaching into
+    the private ``_loop`` attribute from outside. ``feed_data`` is pure buffer
+    work and never needs the loop, so eager feeding before the first read is fine.
+    """
+
+    def __init__(self, limit=asyncio.streams._DEFAULT_LIMIT):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No loop running at construction (the synchronous fixture-setup
+            # case): initialise the base reader's own fields WITHOUT resolving a
+            # loop (``StreamReader.__init__`` would call the deprecated
+            # ``get_event_loop()``), and bind lazily on the first suspending read.
+            if limit <= 0:
+                raise ValueError("Limit cannot be <= 0")
+            self._limit = limit
+            self._loop = None
+            self._buffer = bytearray()
+            self._eof = False
+            self._waiter = None
+            self._exception = None
+            self._transport = None
+            self._paused = False
+        else:
+            super().__init__(limit=limit, loop=loop)
+
+    async def _wait_for_data(self, func_name):
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+        return await super()._wait_for_data(func_name)
+
+
+def _make_runtime(reader: "asyncio.StreamReader | None" = None):
     """An initialized AcpRuntime wired to a fake subprocess.
 
     stdout is a real StreamReader we feed lines into; stdin is a mock that
     records writes; the reader loop can run against it without a real process.
+
+    The default stdout is a ``_RunningLoopStreamReader`` so the reader binds its
+    loop lazily, on the first suspending read, to the loop the test actually runs
+    on -- not whatever loop was current when the runtime was built. That removes
+    the need to rebind the private ``_loop`` attribute (as ``_start_reader`` once
+    did) and makes a reader built from a synchronous fixture correct for any
+    consumer. Callers may still pass an explicit ``reader``.
     """
     rt = AcpRuntime(work_dir="/tmp")
-    reader = asyncio.StreamReader()
+    if reader is None:
+        reader = _RunningLoopStreamReader()
     proc = MagicMock()
     proc.stdout = reader
     proc.stdin = MagicMock()
@@ -1004,17 +1093,9 @@ def _replying_send(queue_for, *, error: dict | None = None, req_id: int = 1) -> 
 
 
 async def _start_reader(rt: AcpRuntime) -> asyncio.Task:
-    # The fake stdout is an ``asyncio.StreamReader`` built at (synchronous)
-    # fixture-setup time, so its ``_loop`` is pinned to whatever loop was current
-    # then -- the autouse ``_ensure_event_loop`` loop. Under a pytest-asyncio
-    # newer than CI's pin the test coroutine runs on a different loop, and the
-    # reader's ``readuntil`` waiter -- created from ``_loop`` -- then belongs to
-    # the setup loop, raising "got Future attached to a different loop". Point the
-    # reader at the running loop before it first awaits; nothing has awaited on it
-    # yet, and for a reader already built on this loop it is a no-op.
-    stdout = getattr(rt._process, "stdout", None)
-    if isinstance(stdout, asyncio.StreamReader):
-        stdout._loop = asyncio.get_running_loop()
+    # The fake stdout is a ``_RunningLoopStreamReader`` that binds its loop
+    # lazily on its first suspending read, so its ``readuntil`` waiter is created
+    # on the loop this coroutine runs on -- no cross-loop rebind needed.
     task = asyncio.ensure_future(rt._reader_loop())
     await asyncio.sleep(0)  # let the loop reach its first readline
     return task
