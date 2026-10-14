@@ -1501,6 +1501,15 @@ Modular aiohttp package at `127.0.0.1:5476` (configurable). Split into:
   drained-alone claim, the entry-gone sweep, the pure revocation rule, and the
   per-family policy table. `chat_turn/recovery.py` applies it at the queue drain
   and the turn's consume seam (see "Chat runner composition").
+- `poisoned_escalation.py` — the poisoned-conversation escalation's cross-turn
+  state machine (`PoisonedConversationEscalation`): the streak of pre-stream
+  exhausted cycles and the discard one-shot, kept as two `_ChatSlot` cells, and
+  the seams `_run_chat` calls (record a terminal failure,
+  activity or a landed turn; ask whether a probe is due; arm a discard; refund the
+  one-shot). The replay ledger's image-history and thinking-binding policies ask
+  for that refund (`refunds_discard_one_shot`) and `chat_turn/recovery.py` calls
+  the owner, so only this module and the slot's constructor write either cell, and
+  nothing else names one in a string (pinned by `test_poisoned_escalation.py`).
 - `slot_projection.py` — read-only source-link indexing/cache and the exact public
   slot-summary projection consumed by REST and WebSocket clients. The source-link
   derivation filters every scanned `SourceRef` against the slot's dismissed
