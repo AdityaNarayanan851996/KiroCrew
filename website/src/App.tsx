@@ -912,22 +912,25 @@ export default function App() {
   const activeSlotProject = useAppSelector(selectActiveSlotProject)
   const terminalPosition = useTerminalPosition()
   const navigate = useNavigate()
-  const mayLeaveForErrorHandoff = useMayLeaveForNavigation()
+  const mayLeaveForNavigation = useMayLeaveForNavigation()
 
   // Main-dashboard role for the artifact popout nav-intent handshake: perform
   // navigation intents forwarded from popout windows (activity-timeline
   // session links, "Ask agent to address", …). Popout and embed windows never
   // register — only handler-registered windows answer nav-requests, which is
   // what keeps a second popout from claiming another popout's navigation.
+  // A forwarded intent replaces the page on screen HERE, so that page's leave
+  // check runs first — the popout cannot see this window's unsaved work.
   useEffect(() => {
     if (isPopout || isEmbed) return
     return setArtifactNavIntentHandler((intent) =>
       applyNavIntentInMain(intent, {
         navigate,
         switchSlot: (slotKey) => { dispatch(switchSlot({ key: slotKey, announceOnMissing: true })) },
+        mayLeave: mayLeaveForNavigation,
       }),
     )
-  }, [isPopout, isEmbed, navigate, dispatch])
+  }, [isPopout, isEmbed, navigate, dispatch, mayLeaveForNavigation])
 
   // Publish the router navigator and the current page's leave answer for the
   // error → agent hand-off. AskAgentButton is deliberately hook-free (its
@@ -942,9 +945,9 @@ export default function App() {
   // banners of its own). They fall through to the hard-nav path instead.
   useEffect(() => {
     if (isPopout || isEmbed) return
-    installSoftNavigate(navigate, mayLeaveForErrorHandoff)
+    installSoftNavigate(navigate, mayLeaveForNavigation)
     return () => installSoftNavigate(null)
-  }, [isPopout, isEmbed, navigate, mayLeaveForErrorHandoff])
+  }, [isPopout, isEmbed, navigate, mayLeaveForNavigation])
 
   const {
     colorTheme,
@@ -1358,13 +1361,20 @@ export default function App() {
           // NavIntent carries no query string, and ChatPage writes `?sid=` back
           // into the URL itself once the session is active.
           { path: '/chat', slotKey },
-          { navigate, switchSlot: (key) => { dispatch(switchSlot({ key, announceOnMissing: true })) } },
+          {
+            navigate,
+            switchSlot: (key) => { dispatch(switchSlot({ key, announceOnMissing: true })) },
+            mayLeave: mayLeaveForNavigation,
+          },
         )
         return
       }
+      // Same leave check as every other in-app exit: a native menu entry
+      // replaces the page on screen just like a sidebar click does.
+      if (!mayLeaveForNavigation()) return
       navigate(path)
     })
-  }, [navigate, dispatch])
+  }, [navigate, dispatch, mayLeaveForNavigation])
 
   useEffect(() => {
     dispatch(fetchSlots()).then(action => {
@@ -1616,7 +1626,7 @@ export default function App() {
               // leave guard first, as every rail row does, so a draft held
               // there (a Profile schedule form) is not dropped silently.
               onClick={() => {
-                if (!isChat) { if (mayLeaveForErrorHandoff()) navigate('/chat', { replace: true }); return }
+                if (!isChat) { if (mayLeaveForNavigation()) navigate('/chat', { replace: true }); return }
                 onActivate()
                 if (!(activePath === '/chat' || activePath === '/')) navigate('/chat', { replace: true })
               }}

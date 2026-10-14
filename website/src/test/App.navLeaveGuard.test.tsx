@@ -16,7 +16,7 @@
  */
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
+import { screen, waitFor, fireEvent, cleanup, act } from '@testing-library/react'
 import { renderWithProviders } from './helpers'
 import App from '../App'
 import SidePanelLayout, { useSidePanelLeaveGuard } from '../components/SidePanelLayout'
@@ -68,6 +68,19 @@ vi.mock('../pages/CapabilitiesPage', () => {
   return { default: CapabilitiesPageStub }
 })
 vi.mock('../hooks/useWebSocket', () => ({ useWebSocket: () => ({ subscribeLogs: () => {} }) }))
+// Capture the main-window nav-intent handler App registers, so a test can
+// deliver the intent a popout would forward over the BroadcastChannel.
+const navIntent = vi.hoisted(() => ({ handler: null as ((intent: { path: string }) => void) | null }))
+vi.mock('../utils/artifactPopout', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../utils/artifactPopout')>()
+  return {
+    ...real,
+    setNavIntentHandler: (fn: (intent: { path: string }) => void) => {
+      navIntent.handler = fn
+      return () => { if (navIntent.handler === fn) navIntent.handler = null }
+    },
+  }
+})
 vi.mock('../hooks/useAgents', () => ({ useAgents: vi.fn(() => ({ agents: [{ name: 'kirocrew' }], defaultAgent: 'kirocrew' })) }))
 vi.mock('../providers/context', () => ({ useProvider: () => ({ id: 'acp' }) }))
 vi.mock('../components/MarkdownRenderer', () => ({ default: ({ content }: { content: string }) => <span>{content}</span>, Lightbox: () => null }))
@@ -169,5 +182,84 @@ describe('sidebar navigation leave guard', () => {
     fireEvent.click(navRow(/^Customize$/))
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(draftValue()).toBe('half-written prompt')
+  })
+})
+
+describe('popout-forwarded navigation leave guard', () => {
+  beforeEach(() => { localStorage.clear(); sessionStorage.clear() })
+  afterEach(() => { vi.restoreAllMocks(); cleanup() })
+
+  // A popout forwards its navigation to this window, which then replaces the
+  // page on screen here. The popout cannot see this window's draft, so the
+  // main window has to ask before it carries the intent out.
+  it('keeps the page on screen when the confirm is declined', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    renderDashboard()
+    await paneReady()
+    typeDraft('half-written prompt')
+    await waitFor(() => expect(navIntent.handler).not.toBeNull())
+    act(() => { navIntent.handler!({ path: '/schedule' }) })
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(draftValue()).toBe('half-written prompt')
+  })
+
+  it('carries the intent out once the confirm is accepted', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderDashboard()
+    await paneReady()
+    typeDraft('half-written prompt')
+    await waitFor(() => expect(navIntent.handler).not.toBeNull())
+    act(() => { navIntent.handler!({ path: '/schedule' }) })
+    await waitFor(() => expect(screen.queryByLabelText('draft')).toBeNull())
+  })
+})
+
+describe('native app-menu navigation leave guard', () => {
+  // The desktop app's menu (Settings…, About) and the Companion's "Open
+  // session" hand this window an in-app path; following it replaces the page
+  // on screen exactly like a sidebar click.
+  let nativeHandler: ((path: string) => void) | null = null
+  beforeEach(() => {
+    localStorage.clear(); sessionStorage.clear()
+    nativeHandler = null
+    ;(window as unknown as { electronAPI?: unknown }).electronAPI = {
+      onNavigate: (fn: (path: string) => void) => { nativeHandler = fn; return () => { nativeHandler = null } },
+    }
+  })
+  afterEach(() => {
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI
+    vi.restoreAllMocks(); cleanup()
+  })
+
+  it('keeps the page on screen when the confirm is declined', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    renderDashboard()
+    await paneReady()
+    typeDraft('half-written prompt')
+    await waitFor(() => expect(nativeHandler).not.toBeNull())
+    act(() => { nativeHandler!('/schedule') })
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(draftValue()).toBe('half-written prompt')
+  })
+
+  it('keeps the page on screen for a declined session deep link', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    renderDashboard()
+    await paneReady()
+    typeDraft('half-written prompt')
+    await waitFor(() => expect(nativeHandler).not.toBeNull())
+    act(() => { nativeHandler!('/chat?sid=other') })
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(draftValue()).toBe('half-written prompt')
+  })
+
+  it('follows the menu path once the confirm is accepted', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderDashboard()
+    await paneReady()
+    typeDraft('half-written prompt')
+    await waitFor(() => expect(nativeHandler).not.toBeNull())
+    act(() => { nativeHandler!('/schedule') })
+    await waitFor(() => expect(screen.queryByLabelText('draft')).toBeNull())
   })
 })

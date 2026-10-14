@@ -212,6 +212,7 @@ describe('applyNavIntentInMain', () => {
       {
         navigate: () => order.push('navigate'),
         switchSlot: () => order.push('switchSlot'),
+        mayLeave: () => true,
       },
     )
     expect(order).toEqual(['prefill', 'switchSlot', 'navigate'])
@@ -221,8 +222,29 @@ describe('applyNavIntentInMain', () => {
   it('skips slot switching for intents without a slotKey', () => {
     const switchSlot = vi.fn()
     const navigate = vi.fn()
-    applyNavIntentInMain({ path: '/artifacts' }, { navigate, switchSlot })
+    applyNavIntentInMain({ path: '/artifacts' }, { navigate, switchSlot, mayLeave: () => true })
     expect(switchSlot).not.toHaveBeenCalled()
+    expect(navigate).toHaveBeenCalledWith('/artifacts')
+  })
+
+  it('drops the whole intent when the page on screen refuses to be left', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const switchSlot = vi.fn()
+    const navigate = vi.fn()
+    applyNavIntentInMain(
+      { path: '/chat', slotKey: 'new-1', prefill: { slotKey: 'new-1', prompt: 'do it' } },
+      { navigate, switchSlot, mayLeave: () => false },
+    )
+    expect(setItem).not.toHaveBeenCalledWith(PREFILL_STORAGE_KEY, expect.anything())
+    expect(switchSlot).not.toHaveBeenCalled()
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('navigates once the page on screen agrees to be left', () => {
+    const navigate = vi.fn()
+    const mayLeave = vi.fn(() => true)
+    applyNavIntentInMain({ path: '/artifacts' }, { navigate, switchSlot: vi.fn(), mayLeave })
+    expect(mayLeave).toHaveBeenCalledTimes(1)
     expect(navigate).toHaveBeenCalledWith('/artifacts')
   })
 })
