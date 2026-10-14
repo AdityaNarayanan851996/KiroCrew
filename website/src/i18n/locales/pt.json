@@ -298,7 +298,7 @@
       "reauth_command": "kirocrew token",
       "run_kirocrew_token_then_paste_sign_in_url": "Execute kirocrew token num terminal, cole abaixo a URL de início de sessão e pressione Enter.",
       "session_expired": "Sessão expirada.",
-      "session_expired_sign_in_again": "A sessão expirou. Execute kirocrew token em um terminal e cole a URL de início de sessão no banner no topo desta página para entrar novamente.",
+      "session_expired_sign_in_again": "Seu login não é mais válido. Execute kirocrew token em um terminal e cole a URL de login no banner no topo desta página para entrar novamente.",
       "stale_owner_session": "Esta sessão é anterior ao proprietário configurado. Entre novamente.",
       "stale_owner_session_sign_in_again": "Esta sessão é anterior ao proprietário configurado (o login ocorreu antes de KIROCREW_OWNER_ID ser definido). Execute kirocrew token em um terminal e cole a URL de início de sessão no banner no topo desta página para entrar novamente.",
       "stream_ended_without_completion": "Stream encerrado sem conclusão",
@@ -10280,9 +10280,11 @@
     "useSessionActions": {
       "close_this_session": "Fechar esta sessão?",
       "reload_failed": "Falha ao recarregar a sessão. O agente pode estar no meio de um turno ou o gateway inacessível; tente novamente quando a sessão estiver ociosa.",
-      "duplicate_unreachable": "Não foi possível duplicar esta sessão — não foi possível acessar o {{productName}}. Verifique sua conexão e tente novamente.",
+      "duplicate_unreachable": "Não foi possível duplicar esta sessão. Não foi possível acessar o {{productName}}. Verifique sua conexão e tente novamente.",
       "reload_failed_subagents": "Os subagentes ainda estão trabalhando nesta sessão. Tente novamente quando terminarem.",
-      "duplicate_failed_reason": "Não foi possível duplicar esta sessão: {{reason}}"
+      "duplicate_failed_reason": "Não foi possível duplicar esta sessão. Motivo: {{reason}}. Tente novamente em instantes.",
+      "duplicate_guided_reason": "Não foi possível duplicar esta sessão. {{reason}}",
+      "duplicate_not_found": "Não foi possível duplicar esta sessão. Ela não está mais aberta. Recarregue a página ou reabra-a pelo Histórico e tente novamente."
     },
     "useStreamingStt": {
       "audio_module_load_failed": "O ditado não terminou de carregar. Verifique sua conexão e dite novamente.",

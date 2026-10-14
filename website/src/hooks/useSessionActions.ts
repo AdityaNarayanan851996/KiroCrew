@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '../api/client'
-import { isSlotCapError } from '../api/apiError'
+import { apiErrorCode, isSlotCapError } from '../api/apiError'
 import { store, useAppDispatch } from '../store'
 import type { MuteFlag } from '../store/dashboardSlice'
 import { deleteSlot, switchSlot } from '../store/chatSlice'
@@ -251,24 +251,35 @@ export function useSessionActions(mode?: string): SessionActions {
         dispatch(switchSlot(data.key))
       }
     },
-    // Duplicate goes through this mutation with no per-call handler, so without
-    // this an error was swallowed and the button did nothing visible -- the
-    // slot-cap 429 that Duplicate most often hits just vanished. Surface it the
-    // same way reloadMutation does (alert(); the dashboard has no global toast).
-    // An ApiError carries the human reason on err.message (apiFailure sets it to
-    // friendlyErrText(status, body) in api/client.ts). The slot-cap guidance is
-    // already a whole message naming sessions, so it is shown on its own rather
-    // than glued after a "Couldn't duplicate" prefix; any other reason is wrapped
-    // in a keyed template so even a bare "not found" names the subject. A
-    // non-ApiError means fetch itself rejected (nothing was reached), so there is
-    // no server reason -- use the standalone connection copy.
+    // Duplicate goes through this mutation with no per-call handler, so this is
+    // the only place its failure becomes visible -- surfaced the same way
+    // reloadMutation does (alert(); the dashboard has no global toast). Every
+    // message shares one shape: "Couldn't duplicate this session. <cause>.
+    // <next step>." A non-ApiError means fetch itself rejected (nothing was
+    // reached). An ApiError carries the human reason on err.message (apiFailure
+    // sets it to friendlyErrText(status, body) in api/client.ts). Three reasons
+    // are shared guidance that is already a cause plus a next step: a gateway
+    // sign-in denial carries the shared sign-in text (the stale-owner wording
+    // for a stale-owner denial, the no-longer-valid sign-in wording otherwise), the
+    // slot-cap 429 carries the shared slot-cap guidance, and an access-proxy
+    // challenge names the proxy and its own remedy. Each follows the subject
+    // unchanged, so the alert reads the same remedy every other surface shows
+    // for that denial, and no retry sentence is added that cannot succeed
+    // before the user acts. The slot_not_found 404 is matched on the
+    // body's `code` and gets its own keyed copy, because its raw reason ("not
+    // found") says neither what is wrong nor what to do.
+    // Any other reason has its end punctuation (Latin, CJK or Devanagari) dropped
+    // so the template's own full stop follows it.
     onError: (err) => {
       if (!(err instanceof ApiError)) {
         alert(i18nT('hooks.useSessionActions.duplicate_unreachable'))
-      } else if (isSlotCapError(err.status, err.body)) {
-        alert(err.message)
+      } else if (err.authRequired || isSlotCapError(err.status, err.body)) {
+        alert(i18nT('hooks.useSessionActions.duplicate_guided_reason', { reason: err.message }))
+      } else if (err.status === 404 && apiErrorCode(err) === 'slot_not_found') {
+        alert(i18nT('hooks.useSessionActions.duplicate_not_found'))
       } else {
-        alert(i18nT('hooks.useSessionActions.duplicate_failed_reason', { reason: err.message }))
+        const reason = err.message.trim().replace(/[.。!！।]+$/u, '')
+        alert(i18nT('hooks.useSessionActions.duplicate_failed_reason', { reason }))
       }
     },
   })
