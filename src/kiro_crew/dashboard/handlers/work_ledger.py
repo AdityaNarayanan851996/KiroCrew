@@ -1798,13 +1798,16 @@ async def api_work_ledger_record(request: web.Request) -> web.Response:
             payload["item"] = item.to_dict()
         if action == "bind":
             # A dispatched worker must have a patrol reading its reports. After the
-            # bind committed, arm the default one when this conductor has no loop;
-            # never raises, never displaces a loop, and a refusal does not undo
-            # the bind (``conductor_patrol`` module docstring).
-            patrol = await conductor_patrol.ensure_patrol(state, key)
+            # bind committed, arm the default one when this conductor has no
+            # active loop; never raises, never displaces an active loop or a
+            # person's stop, and a refusal does not undo the bind
+            # (``conductor_patrol`` module docstring).
+            patrol, reason = await conductor_patrol.ensure_patrol(state, key)
             payload["patrol"] = patrol
-            if not conductor_patrol.has_active_patrol(state, key):
-                payload["patrol_note"] = conductor_patrol.ARM_YOURSELF_NOTE
+            payload["patrol_reason"] = reason
+            note = conductor_patrol.patrol_note(state, key, reason)
+            if note:
+                payload["patrol_note"] = note
         conductor = result.get("conductor")
         if conductor is not None:
             payload["conductor"] = conductor.to_dict()
@@ -1818,6 +1821,20 @@ async def api_work_ledger_record(request: web.Request) -> web.Response:
     # the lock goes back with that divergence visible to the next reader.
     async with _board_lock(key):
         return await _drain_before_cancelling(_under_board())
+
+
+async def holds_ledger(session_key: str) -> bool:
+    """Whether *session_key* holds a readable work ledger.
+
+    For the session-control create route, which arms a work-ledger patrol only
+    on a caller that has a ledger to watch. The key is the caller's own,
+    resolved from its ``X-Session-Key`` by that route; this answers a yes/no
+    and returns nothing from the record.
+    """
+    try:
+        return await asyncio.to_thread(work_ledger.read_conductor, session_key) is not None
+    except Exception:  # noqa: BLE001 - an unreadable ledger is no ledger to watch
+        return False
 
 
 async def api_work_ledger_rebuild(request: web.Request) -> web.Response:

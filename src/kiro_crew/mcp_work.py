@@ -509,9 +509,10 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 "round (and opens the ledger); 'create' mints an item from title + "
                 "acceptance; 'bind' attaches a worker session key to an item — do this "
                 "BEFORE seeding that session, so the worker never starts unbound. When "
-                "your session has no loop, a bind also arms a default work-ledger "
-                "patrol on it (the reply's 'patrol' says armed, existing, refused or "
-                "unsupported, and 'patrol_note' says what to do when none runs); your "
+                "your session has no active loop (none, or one the system stopped), a "
+                "bind also arms a default work-ledger patrol on it; a loop a person "
+                "stopped is kept. The reply always ends 'patrol=<armed|existing|"
+                "refused|unsupported> (<reason>)', plus what to do when none runs; your "
                 "own monitor_start replaces that default; "
                 "'decide' records what you decided and why (the one field a worker reads "
                 "as an instruction); 'verdict' records accept_eval.py's verdict and the "
@@ -745,11 +746,16 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
         item = resp.get("item") or {}
         action = resp.get("action") or payload.get("action") or ""
         if item:
-            return (
+            line = (
                 f"Recorded {action}. item={item.get('item_id') or '(unknown)'} "
                 f"state={item.get('state') or '(unset)'} "
                 f"verdict={item.get('verdict') or '(none)'}"
             )
+            if action == "bind":
+                from kiro_crew.conductor_patrol import reply_line
+
+                line += reply_line(resp)
+            return line
         conductor = resp.get("conductor") or {}
         return f"Recorded {action}. round={conductor.get('round', '(unset)')}"
 

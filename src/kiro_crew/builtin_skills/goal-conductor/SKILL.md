@@ -262,6 +262,12 @@ Settings offers no control for it.
 
 ### Patrol
 
+**Dispatch means monitor**, default `watch="work-ledger"` (one PR URL only when
+that PR is all you wait on). Every `session_create` and `bind` reply ends
+`patrol=<outcome> (<reason>)`. Anything but `armed` or
+`existing (active-work-ledger)` means nobody reads your ledger until you arm
+the loop below.
+
 After dispatching, arm a loop on your own session with `monitor_start`. Put the
 check AND the exit condition in the message, and pass explicit positive
 `interval_secs`, `max_cycles` and `max_runtime_secs`.

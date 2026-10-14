@@ -820,7 +820,10 @@ def operating_mode_block(agent_label: str) -> str:
         f"run), DISPATCH it: open a worker session with session_create, seed "
         f"it with a self-contained brief via session_send (the worker has "
         f"none of this thread's context), then PATROL your workers with "
-        f"session_read_message on a monitor_start loop — you own noticing a "
+        f"session_read_message on a monitor_start loop you arm in the same "
+        f'turn: dispatch means monitor, watch="work-ledger" by default when '
+        f"your workers are bound on your work ledger (the gateway cannot arm "
+        f"one here for you) — you own noticing a "
         f"worker that stalled or died, restarting it, or escalating. Stop a "
         f"runaway with session_stop. You can only control sessions you "
         f"created.\n"
