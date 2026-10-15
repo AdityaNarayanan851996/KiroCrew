@@ -38,6 +38,19 @@ component can hide a control whose request the client would refuse. It shares
 the client's matcher and its absolute-URL refusal; it grants nothing the check
 would not.
 
+`ChatEmbed` and `ChatInput` mount the store-free `chat-core/composer/Attach.tsx`
+picker atom. Each host supplies its existing staging writer and keeps its own
+trigger, file-type hint and focus-return behavior. File selection is reset in
+one place so choosing the same file after removal still works. Only the picker
+is shared: the embed's staging, paste/drop, upload holds, cancellation and
+failed-send recovery stay in the SDK's `useEmbedAttachments`, beside its
+explicit upload grant and scoped transport. Sharing that lifecycle with the
+main chat is still open under #19994.
+`ComposerSend` receives the embed's actual staged-file and upload state, so a
+file-only turn remains sendable and an in-flight upload still holds Send.
+The main chat's slot persistence, file mentions, upload cancellation and send
+recovery keep their existing writers rather than a second private staging list.
+
 `ChatEmbed`'s composer attachments use it for `/api/upload/file`. The upload
 writes to the gateway's disk, so it is an explicit host grant and is never
 implied by `/api/chat`: the attach control renders only when the host's
