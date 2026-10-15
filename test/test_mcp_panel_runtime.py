@@ -486,19 +486,28 @@ class TestDashboardWrite:
 
 
 class TestDashboardWriteClear:
-    """``clear: true`` empties an array field, through the server's whole entry.
+    """``clear: true`` empties an array or object field, through the server's whole entry.
 
     An MCP client can drop an empty list, an empty object or a top-level null from a
-    call's arguments, so ``value: []`` reaches this server as no value at all. A
-    boolean arrives intact, which is why emptying a field is spelled as one. Every
-    case goes through ``_call_tool``, the schema included, because the schema is
+    call's arguments, so ``value: []`` or ``value: {}`` reaches this server as no
+    value at all. A boolean arrives intact, which is why emptying a field is spelled
+    as one. Which empty value to write (``[]`` or ``{}``) is read from the field list
+    the ``dashboard_fields`` tool uses, so the gateway's own type-check still applies.
+    Every case goes through ``_call_tool``, the schema included, because the schema is
     where a call with nothing to write is answered.
     """
 
-    WRITTEN = {"ok": True, "written": {"field": "for_you", "type": "array"}}
+    WRITTEN_ARRAY = {"ok": True, "written": {"field": "for_you", "type": "array"}}
+    WRITTEN_OBJECT = {"ok": True, "written": {"field": "asks", "type": "object"}}
 
-    def test_clear_posts_an_empty_list(self) -> None:
-        with patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN) as mock_post:
+    _ARRAY_FIELDS = {"fields": [{"field": "for_you", "type": "array", "source": "agentic"}]}
+    _OBJECT_FIELDS = {"fields": [{"field": "asks", "type": "object", "source": "agentic"}]}
+
+    def test_clear_posts_an_empty_list_for_an_array_field(self) -> None:
+        with (
+            patch("kiro_crew.mcp_panel._get", return_value=self._ARRAY_FIELDS),
+            patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN_ARRAY) as mock_post,
+        ):
             out = _call_tool("dashboard_write", {"field": "for_you", "clear": True})
 
         assert not out.startswith("Error:"), out
@@ -507,9 +516,92 @@ class TestDashboardWriteClear:
 
     def test_clear_beside_an_empty_list_is_the_same_write(self) -> None:
         """A client that does deliver ``value: []`` next to the flag says one thing."""
-        with patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN) as mock_post:
+        with (
+            patch("kiro_crew.mcp_panel._get", return_value=self._ARRAY_FIELDS),
+            patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN_ARRAY) as mock_post,
+        ):
             _call_tool("dashboard_write", {"field": "for_you", "clear": True, "value": []})
 
+        assert mock_post.call_args[0][1] == {"field": "for_you", "value": []}
+
+    def test_clear_posts_an_empty_object_for_an_object_field(self) -> None:
+        with (
+            patch("kiro_crew.mcp_panel._get", return_value=self._OBJECT_FIELDS),
+            patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN_OBJECT) as mock_post,
+        ):
+            out = _call_tool("dashboard_write", {"field": "asks", "clear": True})
+
+        assert not out.startswith("Error:"), out
+        assert mock_post.call_args[0][1] == {"field": "asks", "value": {}}
+
+    def test_clear_beside_an_empty_object_is_the_same_write(self) -> None:
+        """A client that does deliver ``value: {}`` next to the flag says one thing."""
+        with (
+            patch("kiro_crew.mcp_panel._get", return_value=self._OBJECT_FIELDS),
+            patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN_OBJECT) as mock_post,
+        ):
+            _call_tool("dashboard_write", {"field": "asks", "clear": True, "value": {}})
+
+        assert mock_post.call_args[0][1] == {"field": "asks", "value": {}}
+
+    def test_clear_on_a_scalar_field_falls_through_to_the_gateway(self) -> None:
+        """A scalar field gets ``[]`` and the gateway's own refusal, not an early one.
+
+        The gateway records the ``wrong_type`` refusal in the mistake book; an early
+        refusal here would duplicate it and bypass the book. Fold-sourced fields follow
+        the same path and receive ``field_not_agentic`` from the route.
+        """
+        string_fields = {"fields": [{"field": "headline", "type": "string", "source": "agentic"}]}
+        gateway_reply = {"error": "headline wants string, and this value is array."}
+        with (
+            patch("kiro_crew.mcp_panel._get", return_value=string_fields),
+            patch("kiro_crew.mcp_panel._post", return_value=gateway_reply) as mock_post,
+        ):
+            out = _call_tool("dashboard_write", {"field": "headline", "clear": True})
+
+        assert out.startswith("Error:") and "wants string" in out, out
+        assert mock_post.call_args[0][1] == {"field": "headline", "value": []}, mock_post.call_args
+
+    def test_clear_on_an_unknown_field_posts_an_empty_list_for_the_route_to_refuse(
+        self,
+    ) -> None:
+        """A field not in the list gets ``[]``, so the write route gives its own answer."""
+        no_match = {"fields": [{"field": "other", "type": "array", "source": "agentic"}]}
+        with (
+            patch("kiro_crew.mcp_panel._get", return_value=no_match),
+            patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN_ARRAY) as mock_post,
+        ):
+            _call_tool("dashboard_write", {"field": "unknown_field", "clear": True})
+
+        assert mock_post.call_args[0][1] == {"field": "unknown_field", "value": []}
+
+    @pytest.mark.parametrize(
+        "listed",
+        [
+            {"error": "dashboard fields failed"},
+            {"error": "Kiro Crew gateway not reachable on 127.0.0.1:1", "refused": True},
+            {},
+            {"fields": "not a list"},
+        ],
+        ids=["route-error", "refused", "no-fields-key", "fields-not-a-list"],
+    )
+    def test_clear_posts_an_empty_list_when_the_field_list_cannot_be_read(
+        self, listed: dict[str, Any]
+    ) -> None:
+        """No field list still clears an array field: the write gets ``[]``.
+
+        Emptying an array field must not depend on the fields route answering, so the
+        clear goes on to the write route, which type-checks whatever arrives.
+        """
+        with (
+            patch("kiro_crew.mcp_panel._get", return_value=listed) as mock_get,
+            patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN_ARRAY) as mock_post,
+        ):
+            out = _call_tool("dashboard_write", {"field": "for_you", "clear": True})
+
+        assert mock_get.call_args[0][0] == "/api/agent-panel/dashboard/fields"
+        assert not out.startswith("Error:"), out
+        assert mock_post.call_args[0][0] == "/api/agent-panel/dashboard/write"
         assert mock_post.call_args[0][1] == {"field": "for_you", "value": []}
 
     @pytest.mark.parametrize("value", [[1], {"a": 1}, "x", 0, False])
@@ -517,7 +609,9 @@ class TestDashboardWriteClear:
         with patch("kiro_crew.mcp_panel._post") as mock_post:
             out = _call_tool("dashboard_write", {"field": "for_you", "clear": True, "value": value})
 
-        assert out == "Error: clear: true writes an empty list, so pass it without a value", out
+        assert (
+            out == "Error: clear: true writes the field's empty value, so pass it without a value"
+        ), out
         mock_post.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -550,7 +644,7 @@ class TestDashboardWriteClear:
         mock_post.assert_not_called()
 
     def test_clear_false_leaves_an_ordinary_write_alone(self) -> None:
-        with patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN) as mock_post:
+        with patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN_ARRAY) as mock_post:
             _call_tool("dashboard_write", {"field": "open_items", "clear": False, "value": 3})
 
         assert mock_post.call_args[0][1] == {"field": "open_items", "value": 3}
@@ -565,7 +659,7 @@ class TestDashboardWriteClear:
     @pytest.mark.parametrize("value", [3, [{"text": "x"}], [], {}, False, "phrase"])
     def test_a_write_with_a_value_posts_it_unchanged(self, value: Any) -> None:
         """A call that passes a value posts that value unchanged."""
-        with patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN) as mock_post:
+        with patch("kiro_crew.mcp_panel._post", return_value=self.WRITTEN_ARRAY) as mock_post:
             _call_tool("dashboard_write", {"field": "open_items", "value": value})
 
         assert mock_post.call_args[0][1] == {"field": "open_items", "value": value}
