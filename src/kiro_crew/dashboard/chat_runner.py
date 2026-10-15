@@ -2133,6 +2133,31 @@ def _redact_segment_text(slot: _ChatSlot, text: str) -> tuple[str, list[dict], l
     return redacted, blocked_links, credential_records(matches, slot.credential_evidence)
 
 
+def _append_command_reply(slot: _ChatSlot, text: str) -> None:
+    """Persist a local slash command's reply the way a model segment is persisted.
+
+    A command answered here (``/workflow``, ``/goal``, ``/agent``, ``/prompts``,
+    a harness command the backend cannot run) writes the same assistant row a
+    model reply does, and its text can carry a credential or a suspicious link:
+    an error string, a prompt description, or the user's own argument echoed
+    back. Redacting that text without the records leaves each placeholder
+    unexplained -- no lock tag card, no blocked-link chip, no one-time coach --
+    which is the silent rewrite every model persist seam already avoids. So the
+    text goes through the segment's own redaction pass and the records ride in
+    the row's ``meta`` on the same ``slot.append`` call, so the live frame
+    carries them too (see :func:`_segment_row_meta`). The segment's raw copy,
+    message id and decision strip are left alone: they belong to the model's
+    turn, not to a command answered without one.
+    """
+    redacted, blocked_links, redactions = _redact_segment_text(slot, text)
+    meta: dict[str, Any] = {}
+    if blocked_links:
+        meta["blocked_links"] = blocked_links
+    if redactions:
+        meta["redactions"] = redactions
+    slot.append("assistant", redacted, "msg msg-a", meta=meta or None)
+
+
 #: Window rows a tool group puts between a segment's chunk rows: the call row,
 #: the approval card a gated call appends, and a change card or guide offer.
 _TOOL_GROUP_ROLES = frozenset({"tool", "permission", "card"})
@@ -2843,7 +2868,7 @@ async def _answer_slash_without_channel(
         outcome=outcome,
         metadata={"slot": slot.key},
     )
-    slot.append("assistant", text, "msg msg-a")
+    _append_command_reply(slot, text)
     state.push_slots_update()
     return outcome
 
@@ -4281,9 +4306,7 @@ async def _handle_workflow_command(
                 f"`{started.get('run_id')}` from revision {started.get('revision')}. "
                 "Its result will appear here when it finishes."
             )
-    text, _ = redact_credentials(text)
-    text, _ = redact_exfiltration_urls(text)
-    slot.append("assistant", text, "msg msg-a")
+    _append_command_reply(slot, text)
     sel().log_tool_invocation(
         session_key=session_key,
         agent=slot.agent or "kirocrew",
@@ -4325,9 +4348,7 @@ async def _handle_agent_command(
     else:
         reason = str(body.get("error") or "the switch was refused")
         text = f"⚠️ Could not switch to agent `{agent}`: {reason}"
-    text, _ = redact_credentials(text)
-    text, _ = redact_exfiltration_urls(text)
-    slot.append("assistant", text, "msg msg-a")
+    _append_command_reply(slot, text)
     sel().log_tool_invocation(
         session_key=session_key,
         agent=slot.agent or "kirocrew",
@@ -4437,7 +4458,6 @@ async def _handle_goal_command(state: "DashboardState", slot: "_ChatSlot", messa
                 "I'll work toward it across turns and stop when it's met "
                 "(verified by evidence) — or run `/goal clear` to stop."
             )
-    body = _redact_for_display(body)
     sel().log_tool_invocation(
         session_key=slot.key,
         agent=slot.agent or "kirocrew",
@@ -4447,7 +4467,7 @@ async def _handle_goal_command(state: "DashboardState", slot: "_ChatSlot", messa
         outcome="ok",
         metadata={"slot": slot.key},
     )
-    slot.append("assistant", body, "msg msg-a")
+    _append_command_reply(slot, body)
     state.push_slots_update()
 
 
@@ -7942,9 +7962,7 @@ async def _run_chat(
                     outcome="blocked",
                     metadata={"mention": f"@{name}", "slot": slot.key, "via": "/prompts get"},
                 )
-                slot.append(
-                    "assistant", f"🔒 Prompt `{name}` blocked — sensitive path.", "msg msg-a"
-                )
+                _append_command_reply(slot, f"🔒 Prompt `{name}` blocked — sensitive path.")
                 state.push_slots_update()
             elif status == "too_large":
                 sel().log_tool_invocation(
@@ -7956,10 +7974,8 @@ async def _run_chat(
                     outcome="too_large",
                     metadata={"mention": f"@{name}", "slot": slot.key, "via": "/prompts get"},
                 )
-                slot.append(
-                    "assistant",
-                    f"⚠️ Prompt `{name}` exceeds size limit ({MAX_PROMPT_BYTES // 1000}KB).",
-                    "msg msg-a",
+                _append_command_reply(
+                    slot, f"⚠️ Prompt `{name}` exceeds size limit ({MAX_PROMPT_BYTES // 1000}KB)."
                 )
                 state.push_slots_update()
             else:
@@ -7972,7 +7988,7 @@ async def _run_chat(
                     outcome="not_found",
                     metadata={"mention": f"@{name}", "slot": slot.key, "via": "/prompts get"},
                 )
-                slot.append("assistant", f"❌ Prompt `{name}` not found.", "msg msg-a")
+                _append_command_reply(slot, f"❌ Prompt `{name}` not found.")
                 state.push_slots_update()
             return
 
@@ -8015,9 +8031,7 @@ async def _run_chat(
                 desc = f" — {p['description']}" if p["description"] else ""
                 lines.append(f"- `@{p['fullName']}`{desc}")
         text = "\n".join(lines)
-        text, _ = redact_credentials(text)
-        text, _ = redact_exfiltration_urls(text)
-        slot.append("assistant", text, "msg msg-a")
+        _append_command_reply(slot, text)
         sel().log_tool_invocation(
             session_key="",
             agent=slot.agent or "kirocrew",
