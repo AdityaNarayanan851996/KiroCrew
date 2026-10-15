@@ -6815,7 +6815,11 @@ class GatewayOrchestrator:
                 attempt = 0
                 while True:
                     try:
-                        return await stream_and_collect(client, msg, retry_transient=False)
+                        response = await stream_and_collect(client, msg, retry_transient=False)
+                        # The parent's turn consumed the report: the positive
+                        # acknowledgement an owed expiry report is cleared on.
+                        info._report_delivered = True
+                        return response
                     except PromptBusyExhaustedError:
                         # Provider is dead after exhausting prompt-busy retries.
                         # Reset session + notify, same as TimeoutError path.
@@ -7574,6 +7578,8 @@ class GatewayOrchestrator:
                             "Subagent %s: skipping injection (already collected inline by spawn_sub_agents)",
                             info.id,
                         )
+                        # The blocking tool's return value carried it.
+                        info._report_delivered = True
                         return
 
                     # Fix 2 (B1) race guard: count this completion as an
@@ -7617,6 +7623,7 @@ class GatewayOrchestrator:
                                         "Subagent %s: skipping queue " "(already collected inline)",
                                         info.id,
                                     )
+                                    info._report_delivered = True
                                     return
                                 logger.info(
                                     "Subagent %s: slot %s claimed by another injection, queuing",
@@ -7667,6 +7674,7 @@ class GatewayOrchestrator:
                                 "(already collected inline by spawn_sub_agents)",
                                 info.id,
                             )
+                            info._report_delivered = True
                             return
 
                         # Slot is idle — start _run_chat.
@@ -7799,6 +7807,8 @@ class GatewayOrchestrator:
                         body,
                         meta=self._notif_meta(parent_key),
                     )
+                    # The notification is this route's whole delivery.
+                    info._report_delivered = True
                 return
 
             if parent_key and not parent_key.startswith(("cron:", "subagent:")):
@@ -8208,6 +8218,10 @@ class GatewayOrchestrator:
                 )
             if not parent_key.startswith("cron:"):
                 logger.info("Subagent %s → notification only (parent=%s)", info.id, parent_key)
+                # No conversation to inject into: the notification is this
+                # route's whole delivery. A cron parent acknowledges in
+                # ``_inject_with_retry`` instead, and only when it lands.
+                info._report_delivered = True
 
         assert self.sessions is not None
         assert self.ctx_builder is not None
