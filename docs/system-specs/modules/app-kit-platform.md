@@ -134,12 +134,19 @@ the import map and from every vendor stub, which is what the boundary rests on.
 
 ## Embedded chat file deliveries
 
-The SDK's default `file` renderer draws the shared `FileCard` for a JSON
-record with a non-empty string `filename`. Optional `content_type` and
-`description` fields must be strings when present, and `size` must be a
-number. Invalid records draw nothing; malformed metadata never reaches the
-card. Omitted optional fields remain valid. ChatPage's renderer override
-retains its separate fallback behavior.
+Every surface that draws a `file` row decides with one parser,
+`parseFileRecord` in `website/src/lib/fileRecord.ts`: the SDK's default `file`
+renderer, ChatPage's override and the crew window's sent-file row all call it.
+It accepts a JSON record with a non-empty string `filename`. Optional
+`content_type` and `description` fields must be strings when present, and
+`size` must be a number. Omitted optional fields remain valid; other fields are
+dropped. Anything else (invalid JSON, `null`, a non-object, a missing or empty
+`filename`, malformed metadata) is rejected, so malformed metadata never
+reaches `FileCard`. The surfaces differ only in what they draw: the crew window
+names the peer's file in a line of text rather than a card, and for a rejected
+record the SDK default and the crew window draw nothing, while ChatPage passes
+the row to its `renderUnparsedFile` option, which the single-chat page fills
+with its conversational bubble so the raw text stays visible.
 
 ## Host-mediated chat launch and cron toggles
 
