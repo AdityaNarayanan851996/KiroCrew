@@ -1321,10 +1321,48 @@ agent type out of that message. When the record carries a `description`, or
 failing that the crewmate's goal record already holds goals (what a
 `crewmate.create` card writes), the kickoff appends it as a first draft of the
 goal, which the crewmate restates and asks the user to confirm or change. An
-unreadable goal record only means the kickoff asks for the goal. Once the goal
-is clear, a crewmate whose
-work should run on its own may offer a schedule in plain words, and sets one up
-with its schedule tool only after the user says yes.
+unreadable goal record only means the kickoff asks for the goal. Once the user
+states or confirms the goal, the crewmate proposes it with `set_goal` (a
+`crewmate.goal` card) rather than offering a schedule: follow-up on a goal is
+the check-ins, which the goal-setup nudge (`dashboard/goal_setup.py`) leads to
+with `set_check_ins` after the goal is saved. The member identity sentence
+(`context_assembly/member.py`) carries the same principle on every DM turn: a
+long-term aim the user describes is proposed as a goal, not only remembered.
+
+**Every new crewmate gets its own-record tools.** A crewmate's template need not
+carry `kirocrew-mate`: only the default `kirocrew` spec is built with it, and an
+owner may bind a crewmate to any template. So each create path -- the dashboard
+create (`dashboard/agent_admin/crew_records.py`), the first-crewmate step
+(`agent_materialization/first_crewmate.py`) and `kirocrew agent create` -- calls
+`member_mate_tools.grant_mate_tools_to_new_member` once, right after the member is
+published. It enrolls the member through `CapabilityService` (the same preview and
+save the Capabilities pane runs) with three kinds of row: the `kirocrew-mate`
+server, the `@kirocrew-mate` tools reference and each `agent._MATE_AUTO_GRANTS`
+approval; every other row keeps inheriting its template. It writes nothing when
+the template already mounts or mutes the server, when the template is `kirocrew`
+itself, when POLICY ∩ PROFILE withholds the server (asked fail-closed), when a
+fresh build would not emit it, or when the previewed copy carries a
+`backend_warning` (a backend the member's chats start on cannot load an enrolled
+member's spec). An existing crewmate is never enrolled by this, and a create that
+landed is never reported failed over it. The capability editor accepts that
+server on a member whose Parent lacks it (`agent_capabilities.MEMBER_PLATFORM_SERVERS`):
+its transport is never the request's but the default template's entry
+(`managed_mcp.managed_member_transport`), and every later save refreshes it, or
+drops it when a fresh build would no longer emit it. The copy's entry carries
+`disabled` only as `true` (`agent_capabilities._platform_entry`): an enabled entry
+is byte-for-byte the default template's, because a `"disabled": false` is a key a
+per-session element cannot express, so the session mount
+(`session_mcp.native_mount_withholding`) would withhold the server's identity
+element and every mate call would refuse `identity_unattested`.
+
+Whether the crewmate's sessions load those tools
+(`member_mate_tools.binding_has_mate_tools`, read from the spec they run) picks
+the wording Crew writes for it. With them, the identity sentence, the first
+welcomes and the goal nudges name `update_self`, `set_goal`, `set_key_results`
+and `set_check_ins`; without them, they name no mate tool, have the crewmate
+write proposed goals, milestones and check-ins in the chat, and point the user at
+the crewmate page and its Goals tab. A spec that cannot be read keeps the
+with-tools wording.
 
 The primary New crewmate action (the header **+** menu's one row, the empty
 roster's hero and the switcher's New crewmate) opens the
