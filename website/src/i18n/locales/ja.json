@@ -13011,6 +13011,19 @@
         "folder_conductor": "フォルダーのコンドクター",
         "folder_conductor_desc": "フォルダーの他のチャットを開始したチャットを、そのフォルダーの先頭に引き上げます。左端にアクセントのバーが入り、エージェント名の横に小さな conductor タグが付きます。セッション一覧の並び順が変わるため、有効にするまで一覧はそのままです。フォルダーメニューのチャット項目は常に表示されます。"
       },
+      "kasBundleCard": {
+        "toggle_label": "内蔵の KAS エンジンを使う",
+        "toggle_description": "この {{productName}} リリースでテスト済みの KAS エンジンを実行します。kiro-cli を別途インストールする必要はありません。上の Kiro アカウントでサインインします。切り替えは {{productName}} の再起動後に反映されます。",
+        "installed": "内蔵エンジン {{version}} をインストール済み",
+        "saved_restart_pending": "保存しました。{{productName}} はまだ以前のエンジン経路で動作しています。再起動すると切り替わります：設定 → 情報 → ゲートウェイを再起動。",
+        "not_installed": "内蔵エンジン {{version}} はまだインストールされていません。",
+        "install": "KAS エンジンをインストール",
+        "installing": "KAS {{version}} をインストール中…",
+        "installing_progress": "KAS {{version}} をインストール中: {{percent}}（{{done}} / {{total}}）",
+        "install_failed": "KAS エンジンのインストールを開始できませんでした。",
+        "save_failed": "KAS エンジンの設定を保存できませんでした。",
+        "status_unavailable": "KAS エンジンの状態を読み取れませんでした。"
+      },
       "kiroSignInCard": {
         "title": "Kiro サインイン",
         "checking": "サインイン状態を確認しています…",
