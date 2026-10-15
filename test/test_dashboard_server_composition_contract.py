@@ -488,6 +488,7 @@ _LAZY_IMPORTS = {
     "kiro_crew.hooks": "set_builtin_app_agents set_builtin_app_mcp_servers set_builtin_app_names",
     "kiro_crew.memory": "MemoryStore",
     "kiro_crew.metrics": "_gauges",
+    "kiro_crew.page_cache": "read_now",
     "kiro_crew.security": "redact_credentials redact_exfiltration_urls",
     "kiro_crew.sel": "sel",
     "kiro_crew.stt": "engine stt_models",
