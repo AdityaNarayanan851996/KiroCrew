@@ -366,6 +366,81 @@ describe('CrewDynamicDashboard', () => {
     expect(screen.queryByTestId('crew-dashboard-empty-retry')).toBeNull()
   })
 
+  // The read the gateway actually answers for a crewmate that adopted nothing:
+  // `state: "empty"` with the DEFAULT template (project-report) composed in. The
+  // tab shows the suggestions page instead of that default.
+  const unadopted = () => page({
+    state: 'empty',
+    suggestions: true,
+    state_reason: "no template adopted; showing the default 'project-report'",
+    instance_version: 0,
+    rendered_html: '<!doctype html><title>report</title><p>default report</p>',
+  })
+
+  it('shows the suggestions page, not the default template, for a crewmate with no adopted page', async () => {
+    vi.spyOn(api, 'memberDashboard').mockResolvedValue(unadopted())
+    mount()
+    expect(await screen.findByTestId('crew-dashboard-suggestions')).toBeInTheDocument()
+    expect(screen.queryByTestId('crew-dashboard-frame')).toBeNull()
+    expect(screen.queryByTestId('crew-dashboard-loading')).toBeNull()
+    expect(mints.some((m) => m.includes('default report'))).toBe(false)
+  })
+
+  it('puts a suggested prompt into the chat box through onAct', async () => {
+    vi.spyOn(api, 'memberDashboard').mockResolvedValue(unadopted())
+    const onAct = vi.fn()
+    renderWithProviders(
+      <CrewDynamicDashboard target={{ kind: 'member', slug: 'oncall', member: 'oncall' }} displayName="On Call" onAct={onAct} />,
+    )
+    const prompts = await screen.findAllByTestId('crew-dashboard-suggestion')
+    expect(prompts).toHaveLength(3)
+    fireEvent.click(prompts[0])
+    expect(onAct).toHaveBeenCalledWith(expect.stringMatching(/dashboard/i))
+  })
+
+  it('withholds the prompts when there is no chat box to put them in', async () => {
+    vi.spyOn(api, 'memberDashboard').mockResolvedValue(unadopted())
+    mount()
+    expect(await screen.findByTestId('crew-dashboard-suggestions')).toBeInTheDocument()
+    expect(screen.queryByTestId('crew-dashboard-suggestions-prompts')).toBeNull()
+  })
+
+  it('keeps drawing an ADOPTED page, never the suggestions page', async () => {
+    vi.spyOn(api, 'memberDashboard').mockResolvedValue(page({ state: 'live' }))
+    mount()
+    expect(await screen.findByTestId('crew-dashboard-frame')).toBeInTheDocument()
+    expect(screen.queryByTestId('crew-dashboard-suggestions')).toBeNull()
+  })
+
+  it('draws the page it was sent when the gateway does not say suggestions', async () => {
+    // The shipped page named for the crewmate (`kirocrew-conductor` gets its board)
+    // reads `empty` without the flag: the gateway decides, the tab does not re-derive.
+    vi.spyOn(api, 'memberDashboard').mockResolvedValue(
+      page({ ...unadopted(), suggestions: false, template: { id: 'kirocrew-conductor', version: 1 } }),
+    )
+    renderWithProviders(
+      <CrewDynamicDashboard target={{ kind: 'member', slug: 'kirocrew-conductor', member: 'kirocrew-conductor' }} displayName="Conductor" />,
+    )
+    expect(await screen.findByTestId('crew-dashboard-frame')).toBeInTheDocument()
+    expect(screen.queryByTestId('crew-dashboard-suggestions')).toBeNull()
+  })
+
+  it('a bound package with nothing applied keeps its own empty state', async () => {
+    vi.spyOn(api, 'memberDashboard').mockResolvedValue(
+      page({ state: 'empty', html: '', rendered_html: undefined, dashboard: 'my-pkg' }),
+    )
+    mount()
+    expect(await screen.findByTestId('crew-dashboard-none')).toBeInTheDocument()
+    expect(screen.queryByTestId('crew-dashboard-suggestions')).toBeNull()
+  })
+
+  it('a session target with nothing adopted still draws the default page', async () => {
+    vi.spyOn(api, 'sessionDashboard').mockResolvedValue(unadopted() as never)
+    renderWithProviders(<CrewDynamicDashboard target={{ kind: 'session', slot: 'chat-7' }} displayName="Root" />)
+    expect(await screen.findByTestId('crew-dashboard-frame')).toBeInTheDocument()
+    expect(screen.queryByTestId('crew-dashboard-suggestions')).toBeNull()
+  })
+
   it('never draws the raw template when the stored copy does not parse', async () => {
     // The gateway answers 200 for `error` and `wire()` always carries `html`, but it
     // deliberately does NOT compose that state: no data island, no bootstrap, no
