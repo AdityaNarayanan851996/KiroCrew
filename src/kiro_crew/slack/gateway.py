@@ -75,6 +75,7 @@ from kiro_crew import (
     update_ownership,
     work_root,
 )
+from kiro_crew._facade_compose import compose as _facade_compose
 from kiro_crew.acp.client import AcpError, AcpProcessDied
 from kiro_crew.agent_sdk import AgentTurnUsage
 from kiro_crew.agents_janitor import sweep_agents_dir
@@ -415,7 +416,6 @@ from kiro_crew.session import (
 )
 from kiro_crew.session_start_sizing import resolve_session_start_sizing
 from kiro_crew.skills import SkillsLoader
-from kiro_crew.slack import gateway_runtime as _runtime
 from kiro_crew.slack.client import RealSlackClient
 from kiro_crew.slack.format import (
     build_cron_ack_block,
@@ -1121,9 +1121,8 @@ class GatewayOrchestrator:
 # Every function the owners define runs on this module's globals, so a patch of
 # ``kiro_crew.slack.gateway.<name>`` reaches it wherever it now lives; see
 # ``gateway_runtime``. Run once, after the class has bound the owner methods.
-_runtime.compose(
+_facade_compose(
     globals(),
-    GatewayOrchestrator,
     (
         _admission,
         _channel_lifecycle,
@@ -1157,6 +1156,7 @@ _runtime.compose(
         _runtime_charge,
         _channel_boot,
     ),
+    host=GatewayOrchestrator,
 )
 
 
