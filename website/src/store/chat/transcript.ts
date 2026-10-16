@@ -5,6 +5,7 @@
  *  every slot-detail reducer cuts and merges by. Nothing here touches chat
  *  state; callers pass the arrays in. */
 import type { ChatMessage } from '../../types'
+import { isStopEvent } from '../../lib/stopEvent'
 import { jsonEqual } from '../../utils/structuralEqual'
 import { secureRandomId } from '../../utils/secureId'
 
@@ -181,6 +182,66 @@ export function preserveSettledMcpOauth(existing: ChatMessage[], merged: ChatMes
       // cls / meta wholesale keeps the row the same row for `deduplicateByMid`.
       const prior = settledPrior.get(id)!
       result.push({ ...m, content: prior.content, cls: prior.cls, meta: { ...(prior.meta || {}) } })
+      changed = true
+      continue
+    }
+    result.push(m)
+  }
+  return changed ? result : merged
+}
+
+/** Keep a merged transcript's stop_event cards from REGRESSING to `stopping`.
+ *
+ *  The backend upserts a stop card BY `meta.id`: the press opens it at
+ *  `stopping`, then the same id is re-broadcast settled (`stopped`,
+ *  `stop_failed_reset`, `stop_declined_compacting`). The live frame appliers
+ *  (`applyActiveFrame`) honour that by replacing in place on id — but the
+ *  switch/refresh MERGE does not. It rebuilds the transcript from the server
+ *  snapshot (`mergePreservedClientTs` returns the incoming rows as the base)
+ *  and dedups only by `meta.mid`, while a server snapshot's stop_event row
+ *  carries no `mid` (`_prepare_messages` keeps `mid` for permission rows only).
+ *  So a snapshot captured while the stop was still `stopping`, landing after
+ *  the tab already settled the card, replaces the settled live row with its
+ *  stale `stopping` copy — leaving the card stuck pulsing at `stopping` until a
+ *  reload (#20728).
+ *
+ *  The transition is monotonic (a stop never un-settles), so the SETTLED state
+ *  always wins. For each merged stop_event row still at `stopping`, look up the
+ *  same `meta.id` in the PRIOR transcript (`existing`, the live state the tab
+ *  already held): if that copy is settled, carry its settled `meta`/content
+ *  onto the merged row. A row with no settled prior copy, and every non-stop
+ *  row, pass through untouched.
+ *
+ *  Scope is deliberately the stale-snapshot regression only: a backend that
+ *  recorded two SEPARATE rows for one stop id is a backend-writer concern, not
+ *  one this merge pass papers over. */
+export function preserveSettledStopState(existing: ChatMessage[], merged: ChatMessage[]): ChatMessage[] {
+  // Reuse the one stop-event predicate (`lib/stopEvent.ts`) rather than
+  // re-checking half of it; the id is the backend's upsert key.
+  const stopId = (m: ChatMessage): string | undefined => {
+    if (!isStopEvent(m)) return undefined
+    const id = (m.meta as { id?: unknown } | undefined)?.id
+    return typeof id === 'string' && id ? id : undefined
+  }
+  const isStopping = (m: ChatMessage): boolean =>
+    (m.meta as { state?: string } | undefined)?.state === 'stopping'
+
+  // The settled prior row for each stop id the tab already held.
+  const settledPrior = new Map<string, ChatMessage>()
+  for (const m of existing) {
+    const id = stopId(m)
+    if (id && !isStopping(m)) settledPrior.set(id, m)
+  }
+  if (!settledPrior.size) return merged
+
+  let changed = false
+  const result: ChatMessage[] = []
+  for (const m of merged) {
+    const id = stopId(m)
+    if (id !== undefined && isStopping(m) && settledPrior.has(id)) {
+      // Carry the settled prior row's state forward in place.
+      const prior = settledPrior.get(id)!
+      result.push({ ...m, content: prior.content, cls: prior.cls, meta: { ...(m.meta || {}), ...(prior.meta || {}) } })
       changed = true
       continue
     }
