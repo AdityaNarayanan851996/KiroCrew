@@ -25,7 +25,7 @@ which restates what a member's DM session carries in its context.
 | File | Role |
 |---|---|
 | `src/kiro_crew/config/sections_session.py` | `KiroCrewAgentConfig` — the crew record: `kiro_agent`, `workspace`, `memory_store`, `model`, `reasoning_effort`, `display_name`, `description`, `triggers`, `source`, `session_color`, `avatar`, per-crew watchdog overrides |
-| `src/kiro_crew/config/loader.py` | `resolve_agent_bindings` (crew to workspace / memory store / template) and `resolve_effective_model` (the default-model precedence) |
+| `src/kiro_crew/config/loader_agents.py`, `src/kiro_crew/config/loader.py` | `resolve_agent_bindings` (crew to workspace / memory store / template) and `resolve_effective_model` (the default-model precedence) |
 | `src/kiro_crew/mcp_core_parts/crew.py` | `_do_select_crew` — the roster and bind bodies |
 | `src/kiro_crew/mcp_tools/control.py` | The `select_crew` tool declaration and dispatch |
 | `src/kiro_crew/validation.py` | `SELECT_CREW_SCHEMA` — argument validation for that tool |
