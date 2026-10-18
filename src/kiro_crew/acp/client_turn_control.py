@@ -293,14 +293,14 @@ async def cancel_session(self: AcpClient, grace_secs: float = 0.0) -> None:
             "method": METHOD_CANCEL,
             "params": {"sessionId": self._session_id},
         }
-        data = json.dumps(notification) + "\n"
+        data = transport_framing.encode_frame(notification)
         # Best effort, never swallowed by the write lock: a cancel is the
         # one signal that can end a wedged turn, so it is appended unlocked
         # if the lock does not come within the no-progress bound.
         outcome = await write_notification_best_effort(
             self._process.stdin,
             self._stdin_write_lock(),
-            data.encode(),
+            data,
             bound_secs=transport_framing._RESPONSE_WRITE_BOUND_SECS,
         )
         # Only a drained frame is evidence the backend moved: an unlocked
@@ -966,14 +966,14 @@ async def _write_steer_cancel(self: AcpClient) -> None:
     """Send ``session/cancel`` for a loop a steer started; best effort."""
     if not self._process or not self._process.stdin:
         return
-    data = json.dumps(
+    data = transport_framing.encode_frame(
         {"jsonrpc": "2.0", "method": METHOD_CANCEL, "params": {"sessionId": self._session_id}}
     )
     try:
         await write_notification_best_effort(
             self._process.stdin,
             self._stdin_write_lock(),
-            (data + "\n").encode(),
+            data,
             bound_secs=transport_framing._RESPONSE_WRITE_BOUND_SECS,
         )
     except Exception as exc:
