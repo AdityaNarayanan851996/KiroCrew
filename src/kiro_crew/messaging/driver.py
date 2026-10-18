@@ -604,6 +604,24 @@ class TurnDriver:
         compaction_filter = _CompactionNoticeFilter()
         steering_filter = _SteeringMarkerFilter()
         stream_redactor = StreamRedactor(_redact)
+        # Last character fed to the redactor this turn, and whether a tool call
+        # ran since. Text either side of a tool call is one run to every
+        # renderer that joins its chunks -- Slack lays a message's markdown
+        # appends end to end with the task card in the plan -- so "around that
+        # time." + tool + "No logs" read "time.No logs", and a fence opened right
+        # after a file edit landed on the end of the prose line. The first text
+        # after the call opens with a paragraph break when neither side already
+        # has whitespace there: the native Slack path's ``tool_gap`` rule, which
+        # leaves a sentence the model continues with " and ..." alone.
+        # ``fed_raw`` and ``released`` are everything fed to the redactor and
+        # everything it returned this turn, before any break; while no
+        # redaction has changed a byte, the second is a prefix of the first and
+        # the rest is what it holds. ``break_after`` is that held text at the
+        # join, and the break goes into the output right after it.
+        fed_raw = ""
+        released = ""
+        tool_gap = False
+        break_after: str | None = None
         pending_steer_events = 0
         unmatched_marker_events = 0
         # Monotonic start of this turn, compared with the provider's stamp of
@@ -663,9 +681,47 @@ class TurnDriver:
         # and bounded by the turn's tool-call count.
         tool_purposes: dict[str, str] = {}
 
+        def place_tool_break(safe: str) -> str:
+            """Put the pending tool-call break into redacted output.
+
+            The break is never fed to the redactor: a newline between the two
+            halves of a key split by the call would end the credential run, so
+            each half would pass the scan alone and the renderer would show both.
+            The redactor sees the raw text joined, and the break goes into what
+            it emits, at the end of the raw text it was holding at the call. It
+            waits while the redactor emits nothing. When the first output does
+            not start with that text verbatim, a redaction reached across the
+            join (or the redactor released only part of it) and the break is
+            dropped: an inserted break never splits what was scanned as one.
+            """
+            nonlocal break_after, released
+            released += safe
+            if break_after is None or not safe:
+                return safe
+            at = len(break_after)
+            if safe.startswith(break_after):
+                safe = safe[:at] + "\n\n" + safe[at:]
+            break_after = None
+            return safe
+
         async def emit_text(text: str) -> None:
-            nonlocal accumulated
-            safe = stream_redactor.feed(text)
+            nonlocal accumulated, fed_raw, tool_gap, break_after
+            if not text:
+                return
+            if tool_gap:
+                tool_gap = False
+                tail = fed_raw[-1:]
+                if (
+                    tail
+                    and not tail.isspace()
+                    and not text[0].isspace()
+                    and fed_raw.startswith(released)
+                ):
+                    # A turn whose output an earlier redaction already changed
+                    # gives no held text to anchor on, so it gets no break.
+                    break_after = fed_raw[len(released) :]
+            fed_raw += text
+            safe = place_tool_break(stream_redactor.feed(text))
             if safe:
                 accumulated += safe
                 self.partial_text = accumulated
@@ -673,7 +729,7 @@ class TurnDriver:
 
         async def flush_redactor() -> None:
             nonlocal accumulated
-            tail = stream_redactor.flush()
+            tail = place_tool_break(stream_redactor.flush())
             if tail:
                 accumulated += tail
                 self.partial_text = accumulated
@@ -784,6 +840,7 @@ class TurnDriver:
                     tool_name=getattr(event, "tool_name", "") or "",
                     mcp_server=getattr(event, "mcp_server_name", "") or "",
                 )
+                tool_gap = True
                 await self.renderer.dispatch(
                     OutputEvent(
                         kind=TOOL_CALL,
