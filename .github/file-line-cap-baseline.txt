@@ -53,7 +53,6 @@
 2594 src/kiro_crew/subagent_persistence.py
 2096 src/kiro_crew/webex/transport_dispatch.py
 2641 test/conftest.py
-5531 test/test_apps_routes_coverage.py
 3299 test/test_artifacts_handlers.py
 2475 test/test_chat_mirror.py
 10498 test/test_cli.py
@@ -74,7 +73,6 @@
 2725 test/test_plugin_import.py
 3193 test/test_sandbox_absent_ceiling_seal.py
 12647 test/test_security.py
-5509 test/test_sel.py
 9530 test/test_session.py
 6415 test/test_session_transfer.py
 3082 test/test_skills.py
