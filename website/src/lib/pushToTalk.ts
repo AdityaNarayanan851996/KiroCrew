@@ -7,13 +7,20 @@
  * cannot collide with an editor chord — which matters because the composer almost
  * always has focus while dictating.
  *
- * Stored BROWSER-LOCAL (localStorage), not in the server-side STT config, for the
- * same reason `getPreferredMicId` is: the right key depends on the keyboard in
- * front of you, and one account reaches the dashboard from several machines. A
- * server-side default would push the wrong key onto every other device.
+ * Stored in localStorage, not in the server-side STT config, and backed up
+ * through the ui-prefs allowlist (`DURABLE_PREF_KEYS` in lib/uiPrefs.ts) like
+ * the other browser-local Settings choices. The backup holds the most recent
+ * save from any client. A client that holds its own copy keeps it. A client
+ * with none (a fresh profile, or a destructive upgrade that emptied the origin)
+ * takes the backup once and can replace it locally. The binding is positional
+ * and the platform defaults differ, so a Windows or Linux client that inherits
+ * a Mac client's bare right Option gets a key that does not arm on most of its
+ * layouts (right Alt is AltGr there) and changes it once in Settings > Voice.
+ * That one change costs less than re-recording the key after every destructive
+ * upgrade, which is why this key is durable while `getPreferredMicId` is not.
  */
-import { safeSetItem } from '../utils/safeStorage'
 import { i18nT } from '../i18n/t'
+import { savePrefExplicitly } from './uiPrefs'
 
 export type PttMode = 'toggle' | 'ptt' | 'hybrid'
 
@@ -387,12 +394,14 @@ export function loadPttConfig(mac: boolean = IS_MAC): PttConfig {
   }
 }
 
-/** Persist and broadcast, so every mounted consumer re-reads without prop drilling. */
-export function savePttConfig(cfg: PttConfig): void {
-  safeSetItem(PTT_STORAGE_KEY, JSON.stringify(cfg))
+/** Persist and broadcast, so every mounted consumer re-reads without prop drilling.
+ *  Returns false when storage refused the choice (nothing was stored). */
+export function savePttConfig(cfg: PttConfig): boolean {
+  const ok = savePrefExplicitly(PTT_STORAGE_KEY, JSON.stringify(cfg))
   try {
     window.dispatchEvent(new Event(PTT_CHANGED_EVENT))
   } catch {
-    /* no window (SSR/test env) — persistence already happened */
+    /* no window (SSR/test env) — the persistence attempt already happened */
   }
+  return ok
 }

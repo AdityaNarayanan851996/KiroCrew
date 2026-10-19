@@ -1241,7 +1241,21 @@ Contract:
   interface mode (`mc-ui`), reading width (`mc-reading-width`), the sessions
   sidebar width and the width to give back when leaving board view
   (`mc-sidebar-width`, `mc-sidebar-width-pre-board`), and the board folder
-  collapse overrides described above -- are durable.
+  collapse overrides described above -- are durable, and so are the Settings >
+  Shortcuts choices: the on/off switch (`mc-keyboard-shortcuts`), the macOS
+  digit modifier (`mc-mac-ctrl-digits`), the Search everywhere chord
+  (`mc-quicksearch-shortcut`), and the panel toggle chords
+  (`mc-panel-toggle-shortcuts`), and the push-to-talk key (`mc-ptt-config`)
+  on Settings > Voice. The push-to-talk binding is positional and the
+  platform defaults differ, so a client that inherits another machine's
+  binding (a Mac client's bare right Option does not arm on most Windows and
+  Linux layouts) changes it once; that one change costs less than
+  re-recording the key after every destructive upgrade. Two neighboring keys
+  are deliberately excluded: the microphone choice (`mc-mic-device-id`) is a
+  device id the browser issues for that machine, so a restored one names no
+  device, and the rebound-shortcut overrides (`mc-shortcut-overrides`) have
+  no writer yet, so the change that adds the writer must also add the key to
+  the list.
 - A SETTINGS IMPORT rewrites this file under a profile that has already synced,
   which the cold-profile rule above would never re-read. The client therefore
   pauses the sync before sending the import (`pauseUiPrefsSync`: no flush,
@@ -1319,6 +1333,16 @@ Contract:
     during restore and reconcile; its marker clears only for a child the host
     acknowledged and only once the synced fingerprints persisted; and host adoption
     (`adoptHostUiPrefsOnNextLoad`) removes the key.
+  - PLAIN DIRTY marker: a plain key written only by an explicit user action
+    records the save in `mc-ui-prefs-plain-dirty` (`savePrefExplicitly`, which writes the mark first and rolls it back if the value is refused) at its
+    writer's save seam: the Shortcuts switches (`components/ShortcutsModal.tsx`),
+    the Search everywhere chord, the panel toggle chords and the push-to-talk
+    key. Without it a value saved after a failed restore or reconcile is outside
+    the frozen owned-at-failure snapshot, and the next successful pass puts the
+    host value over the user's choice. A marked key counts as owned on both
+    restore paths and is forced into the next upload; its mark clears once that
+    upload is baselined; host adoption removes the key. Only allowlisted plain
+    keys are accepted.
 - Also excluded: any value that GATES A SAFETY CONFIRMATION. `mc-yolo-ack` is the
   instance — its presence makes the approval-mode picker skip the confirmation
   and enable full auto-approval — and the reason is that this file sits in the
