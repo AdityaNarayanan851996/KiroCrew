@@ -356,7 +356,7 @@ class TestTaskRunnerSurface:
         assert declined[0]["metadata"]["tier"] == "hook_auto_approve"
         # Disclosure rule: the audit row carries the CONSTANT log text and the
         # code — never the refusal's human-facing detail, which names resolved
-        # paths (see the "Refusal reasons" note in name_grant.py).
+        # paths (see the "Refusal reasons" note in name_grant_refusals.py).
         assert declined[0]["error"] == _REFUSAL.log_text
         assert _REFUSAL.detail not in repr(declined[0])
 
@@ -462,7 +462,7 @@ class TestSubagentSurface:
         assert declined[0]["metadata"]["tier"] == "hook_auto_approve"
         # Disclosure rule: the audit row carries the CONSTANT log text and the
         # code — never the refusal's human-facing detail, which names resolved
-        # paths (see the "Refusal reasons" note in name_grant.py).
+        # paths (see the "Refusal reasons" note in name_grant_refusals.py).
         assert declined[0]["error"] == _REFUSAL.log_text
         assert _REFUSAL.detail not in repr(declined[0])
 
@@ -610,7 +610,7 @@ class TestTurnDriverSurface:
         assert declined[0]["source"] == ""
         # Disclosure rule: the audit row carries the CONSTANT log text and the
         # code — never the refusal's human-facing detail, which names resolved
-        # paths (see the "Refusal reasons" note in name_grant.py).
+        # paths (see the "Refusal reasons" note in name_grant_refusals.py).
         assert declined[0]["error"] == _REFUSAL.log_text
         assert _REFUSAL.detail not in repr(declined[0])
 
